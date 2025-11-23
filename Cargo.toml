@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "storage",
+    "wal",
+    "mvcc",
+    "executor",
+]
+
+resolver = "2"
