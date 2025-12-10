@@ -1,0 +1,19 @@
+# Clippy configuration for deep-postgres
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 25
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Too many arguments threshold
+too-many-arguments-threshold = 7
+
+# Too many lines threshold
+too-many-lines-threshold = 100
+
+# Verbose bit mask threshold
+verbose-bit-mask-threshold = 1
+
+# Allow certain patterns common in systems code
+allow-unwrap-in-tests = true

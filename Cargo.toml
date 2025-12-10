@@ -5,5 +5,32 @@ members = [
     "mvcc",
     "executor",
 ]
-
 resolver = "2"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+rust_2018_idioms = "warn"
+
+[workspace.lints.clippy]
+# Lint groups with lower priority so individual lints can override
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Allow these in systems code where they're often necessary
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+# Const fn suggestions - we'll add const where it matters for perf
+missing_const_for_fn = "allow"
+# Doc markdown - PostgreSQL is a proper noun, not code
+doc_markdown = "allow"
+
+[workspace.dependencies]
+bytemuck = { version = "1.14", features = ["derive"] }
+thiserror = "1.0"
+static_assertions = "1.1"
+bitflags = "2.4"
