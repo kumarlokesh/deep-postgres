@@ -52,4 +52,22 @@ pub enum StorageError {
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Buffer pool exhausted (all buffers pinned).
+    #[error("buffer pool exhausted: all buffers are pinned")]
+    BufferPoolExhausted,
+
+    /// Invalid buffer ID.
+    #[error("invalid buffer ID: {buffer_id}")]
+    InvalidBufferId {
+        /// The invalid buffer ID.
+        buffer_id: u32,
+    },
+
+    /// Buffer not pinned.
+    #[error("buffer {buffer_id} is not pinned")]
+    BufferNotPinned {
+        /// The buffer ID.
+        buffer_id: u32,
+    },
 }

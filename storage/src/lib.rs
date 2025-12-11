@@ -48,13 +48,19 @@
 //! assert_eq!(retrieved, tuple_data);
 //! ```
 
+pub mod btree;
+pub mod buffer;
 pub mod error;
 pub mod page;
 pub mod tuple;
 pub mod types;
+pub mod visibility;
 
 // Re-export commonly used items
+pub use btree::{BTreePage, BTreePageType};
+pub use buffer::{BufferId, BufferPool, BufferTag};
 pub use error::{StorageError, StorageResult};
 pub use page::{ItemIdData, Page, PageHeaderData, PAGE_SIZE};
 pub use tuple::{HeapTupleHeader, HEAP_TUPLE_HEADER_SIZE};
 pub use types::{BlockNumber, CommandId, OffsetNumber, TransactionId};
+pub use visibility::{Snapshot, VisibilityResult, heap_tuple_satisfies_mvcc};
