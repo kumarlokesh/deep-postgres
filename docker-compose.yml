@@ -1,0 +1,19 @@
+services:
+  # dev: full toolchain with source mounted; run `make test-race`, `make lint` etc.
+  dev:
+    build:
+      context: .
+      target: dev
+    volumes:
+      - .:/workspace
+      - go-cache:/root/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    working_dir: /workspace
+    environment:
+      - CGO_ENABLED=0
+      - GOFLAGS=-mod=mod
+    command: make test-race
+
+volumes:
+  go-cache:
+  go-build-cache:
