@@ -94,13 +94,22 @@ type BufferPoolStats struct {
 	Pinned int
 }
 
+// relEntry binds a relation's file location to its storage manager.
+type relEntry struct {
+	node RelFileNode
+	smgr StorageManager
+}
+
 // BufferPool manages a fixed pool of page buffers with clock-sweep eviction.
+// Optionally, relations can be registered with a StorageManager so that cache
+// misses are served from disk and dirty evictions are written back.
 type BufferPool struct {
 	descriptors []BufferDesc
 	pages       []*Page
 	tagMap      map[BufferTag]BufferId
 	clockHand   int
 	numBuffers  int
+	rels        map[Oid]relEntry // relation registry for smgr-backed I/O
 }
 
 // NewBufferPool creates a pool of numBuffers slots.
@@ -114,6 +123,7 @@ func NewBufferPool(numBuffers int) *BufferPool {
 		pages:       make([]*Page, numBuffers),
 		tagMap:      make(map[BufferTag]BufferId, numBuffers),
 		numBuffers:  numBuffers,
+		rels:        make(map[Oid]relEntry),
 	}
 	for i := range pool.pages {
 		pool.pages[i] = NewPage()
@@ -123,6 +133,13 @@ func NewBufferPool(numBuffers int) *BufferPool {
 
 // NumBuffers returns the total number of buffer slots.
 func (p *BufferPool) NumBuffers() int { return p.numBuffers }
+
+// RegisterRelation binds a relation OID to its physical location and storage
+// manager.  After registration, ReadBuffer will load cache misses from disk
+// and dirty evictions will be written back via smgr.
+func (p *BufferPool) RegisterRelation(relId Oid, node RelFileNode, smgr StorageManager) {
+	p.rels[relId] = relEntry{node: node, smgr: smgr}
+}
 
 // ReadBuffer returns the buffer ID for tag, pinning it.
 // If the page is already in the pool, its existing slot is returned.
@@ -150,8 +167,9 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 		delete(p.tagMap, desc.Tag)
 	}
 
-	// Flush dirty slot (disk write would happen here).
+	// Flush dirty slot: write back to disk if the relation is registered.
 	if desc.IsDirty() {
+		p.writePage(desc.Tag, p.pages[id])
 		desc.State &^= BmDirty
 	}
 
@@ -160,10 +178,36 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 	desc.State = BmValid
 	desc.UsageCount = maxUsageCount
 	desc.Pin()
-	p.pages[id].init()
+
+	// Load the page from disk if a storage manager is registered.
+	// On a miss (block does not exist yet), fall back to a fresh empty page.
+	if !p.readPage(tag, p.pages[id]) {
+		p.pages[id].init()
+	}
+
 	p.tagMap[tag] = id
 
 	return id, nil
+}
+
+// readPage fills page from disk via smgr.  Returns true on success.
+func (p *BufferPool) readPage(tag BufferTag, page *Page) bool {
+	entry, ok := p.rels[tag.RelationId]
+	if !ok {
+		return false
+	}
+	err := entry.smgr.Read(entry.node, tag.Fork, tag.BlockNum, page.data[:])
+	return err == nil
+}
+
+// writePage flushes page to disk via smgr.  Silently ignored if no smgr is registered.
+func (p *BufferPool) writePage(tag BufferTag, page *Page) {
+	entry, ok := p.rels[tag.RelationId]
+	if !ok {
+		return
+	}
+	// Ignore write errors here; a real implementation would handle them.
+	_ = entry.smgr.Write(entry.node, tag.Fork, tag.BlockNum, page.data[:])
 }
 
 // allocateBuffer finds a victim buffer using clock sweep.
@@ -260,10 +304,15 @@ func (p *BufferPool) LookupBuffer(tag BufferTag) (BufferId, bool) {
 	return id, ok
 }
 
-// FlushAll clears the dirty flag on every buffer (simulates writing to disk).
+// FlushAll writes all dirty buffers to disk (if smgr is registered) and
+// clears their dirty flags.
 func (p *BufferPool) FlushAll() {
 	for i := range p.descriptors {
-		p.descriptors[i].State &^= BmDirty
+		desc := &p.descriptors[i]
+		if desc.IsDirty() {
+			p.writePage(desc.Tag, p.pages[i])
+			desc.State &^= BmDirty
+		}
 	}
 }
 

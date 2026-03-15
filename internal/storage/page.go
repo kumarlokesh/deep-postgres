@@ -362,6 +362,49 @@ func (p *Page) InsertTuple(tupleData []byte) (int, error) {
 	return itemIndex, nil
 }
 
+// InsertTupleAt inserts tupleData and places the new line pointer at position
+// pos in the ItemId array, shifting existing line pointers [pos, n) one slot
+// to the right.  This keeps the ItemId array in sorted key order for B-tree
+// pages, which require entries in their logical key sequence.
+//
+// Tuple data is always written downward (same as InsertTuple); only the
+// line pointer array is rearranged.  Requires len(tupleData)+ItemIdSize <= FreeSpace()
+// and 0 <= pos <= ItemCount().
+func (p *Page) InsertTupleAt(pos int, tupleData []byte) error {
+	tupleLen := len(tupleData)
+	required := tupleLen + ItemIdSize
+	free := p.FreeSpace()
+	if free < required {
+		return errPageFull(required, free)
+	}
+
+	h := p.Header()
+	n := h.ItemCount()
+	if pos < 0 || pos > n {
+		return errInvalidItemIndex(pos)
+	}
+
+	newUpper := int(h.PdUpper) - tupleLen
+	copy(p.data[newUpper:newUpper+tupleLen], tupleData)
+
+	// Shift line pointers [pos, n) one slot to the right.
+	// Go's built-in copy handles overlapping slices safely (memmove semantics).
+	if pos < n {
+		src := itemIdOffset(pos)
+		dst := itemIdOffset(pos + 1)
+		count := (n - pos) * ItemIdSize
+		copy(p.data[dst:dst+count], p.data[src:src+count])
+	}
+
+	lp := NewItemId(uint16(newUpper), uint16(tupleLen))
+	encodeItemId(p.data[itemIdOffset(pos):], lp)
+
+	h.PdUpper = LocationIndex(newUpper)
+	h.PdLower += LocationIndex(ItemIdSize)
+	p.setHeader(h)
+	return nil
+}
+
 // GetTuple returns the raw bytes of the tuple at 0-based index i.
 // Returns nil if the line pointer is not LpNormal.
 func (p *Page) GetTuple(i int) ([]byte, error) {
