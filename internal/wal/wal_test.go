@@ -480,7 +480,7 @@ func TestSegmentReaderCrossPageRecord(t *testing.T) {
 func TestRmgrDispatchUnknown(t *testing.T) {
 	rec := &Record{Header: XLogRecord{XlRmid: RmgrMax - 1}, LSN: MakeLSN(0, 0)}
 	// RmgrMax-1 is not registered in tests; verify ErrUnknownRmgr.
-	err := Dispatch(rec)
+	err := Dispatch(RedoContext{Rec: rec, LSN: rec.LSN})
 	var unkErr ErrUnknownRmgr
 	if !errors.As(err, &unkErr) {
 		t.Fatalf("expected ErrUnknownRmgr, got %v", err)
@@ -498,7 +498,7 @@ func TestRmgrDispatchUnimplemented(t *testing.T) {
 	}
 
 	rec := &Record{Header: XLogRecord{XlRmid: testID}, LSN: MakeLSN(0, 0)}
-	err := Dispatch(rec)
+	err := Dispatch(RedoContext{Rec: rec, LSN: rec.LSN})
 	var unimplErr ErrUnimplementedRedo
 	if !errors.As(err, &unimplErr) {
 		t.Fatalf("expected ErrUnimplementedRedo, got %v", err)

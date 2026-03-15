@@ -12,14 +12,35 @@ package wal
 
 import "fmt"
 
+// PageWriter is the storage interface used by rmgr Redo callbacks.
+//
+// It abstracts the buffer pool so the WAL package does not import the storage
+// package directly.  The storage package provides a concrete implementation
+// (WalPageStore) that the caller wires in via RedoEngine.SetStore.
+//
+// Each method is idempotent: if the target page's LSN is already >= recLSN
+// the change has been applied and the method must be a no-op.
+type PageWriter interface {
+	// ApplyFPW restores a full-page write image to the given block.
+	ApplyFPW(loc RelFileLocator, fork ForkNum, block uint32, img *BlockImage, recLSN LSN) error
+
+	// ApplyInsert places tupleData at offnum (1-based) on the given block.
+	// If initPage is true the page is initialised first.
+	ApplyInsert(loc RelFileLocator, fork ForkNum, block uint32, offnum uint16, tupleData []byte, initPage bool, recLSN LSN) error
+
+	// ApplyDelete marks the item at offnum (1-based) on the given block as dead.
+	ApplyDelete(loc RelFileLocator, fork ForkNum, block uint32, offnum uint16, recLSN LSN) error
+}
+
 // RedoContext carries the per-record context passed to RmgrOps.Redo.
-// It will be extended in later milestones with a buffer manager reference,
-// transaction map, etc.
 type RedoContext struct {
 	// Rec is the record being replayed.
 	Rec *Record
 	// LSN is the start LSN of Rec.
 	LSN LSN
+	// Store is the optional storage layer for page application.
+	// Nil when the engine is run without a storage backend (e.g. unit tests).
+	Store PageWriter
 }
 
 // RmgrOps is the set of callbacks registered by each resource manager.
@@ -80,16 +101,16 @@ func (e ErrUnimplementedRedo) Error() string {
 	return fmt.Sprintf("wal: redo not implemented for rmgr %s", e.RmgrName)
 }
 
-// Dispatch calls the Redo callback for the resource manager referenced by rec.
-func Dispatch(rec *Record) error {
-	ops := Lookup(rec.Header.XlRmid)
+// Dispatch calls the Redo callback for the resource manager referenced by ctx.Rec.
+func Dispatch(ctx RedoContext) error {
+	ops := Lookup(ctx.Rec.Header.XlRmid)
 	if ops == nil {
-		return ErrUnknownRmgr{ID: rec.Header.XlRmid}
+		return ErrUnknownRmgr{ID: ctx.Rec.Header.XlRmid}
 	}
 	if ops.Redo == nil {
 		return ErrUnimplementedRedo{RmgrName: ops.Name}
 	}
-	return ops.Redo(RedoContext{Rec: rec, LSN: rec.LSN})
+	return ops.Redo(ctx)
 }
 
 // Describe returns a human-readable description of a WAL record.

@@ -37,6 +37,7 @@ type RedoEngine struct {
 	endLSN   LSN // replay stops when currentLSN >= endLSN (0 = replay all)
 	provider SegmentProvider
 	progress RedoProgress
+	store    PageWriter // optional; nil = no page application
 
 	// stats
 	stats RedoStats
@@ -129,7 +130,7 @@ func (e *RedoEngine) Run() error {
 
 			e.stats.BytesProcessed += uint64(rec.Header.XlTotLen)
 
-			redoErr := Dispatch(rec)
+			redoErr := Dispatch(RedoContext{Rec: rec, LSN: rec.LSN, Store: e.store})
 			switch {
 			case redoErr == nil:
 				e.stats.RecordsApplied++
@@ -156,6 +157,10 @@ func (e *RedoEngine) Run() error {
 		}
 	}
 }
+
+// SetStore wires a storage backend into the engine.  Call before Run.
+// When set, each rmgr Redo callback receives a non-nil Store in its RedoContext.
+func (e *RedoEngine) SetStore(s PageWriter) { e.store = s }
 
 // Stats returns a copy of the current replay statistics.
 func (e *RedoEngine) Stats() RedoStats { return e.stats }
