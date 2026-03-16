@@ -30,6 +30,24 @@ type PageWriter interface {
 
 	// ApplyDelete marks the item at offnum (1-based) on the given block as dead.
 	ApplyDelete(loc RelFileLocator, fork ForkNum, block uint32, offnum uint16, recLSN LSN) error
+
+	// ApplyBtreeInsert inserts an index tuple at offnum (1-based) on the given
+	// B-tree page, maintaining the sorted item-pointer array.
+	// If initPage is true the page is initialised as a new B-tree page first
+	// (leaf when isLeaf is true, internal otherwise).
+	ApplyBtreeInsert(loc RelFileLocator, fork ForkNum, block uint32, offnum uint16, tupleData []byte, initPage, isLeaf bool, recLSN LSN) error
+
+	// ApplyBtreeSplit initialises a new right B-tree page that results from a
+	// page split, populating it with the entries in rightItems and updating the
+	// sibling chain pointers (left↔right, right↔oldRight).
+	//
+	// leftBlock  — block number of the left page (already updated by caller)
+	// rightBlock — block number of the new right page (this block)
+	// oldRight   — former right sibling of left, InvalidBlockNumber if none
+	// level      — B-tree level (0 = leaf)
+	// isLeaf     — true if the right page is a leaf
+	// rightItems — raw index-tuple bytes to place on the right page (in order)
+	ApplyBtreeSplit(loc RelFileLocator, fork ForkNum, rightBlock, leftBlock, oldRight uint32, level uint32, isLeaf bool, rightItems []byte, recLSN LSN) error
 }
 
 // RedoContext carries the per-record context passed to RmgrOps.Redo.

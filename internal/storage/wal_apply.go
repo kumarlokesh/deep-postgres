@@ -159,6 +159,110 @@ func (s *WalPageStore) ApplyDelete(loc wal.RelFileLocator, fork wal.ForkNum, blo
 	return nil
 }
 
+// ApplyBtreeInsert inserts an index tuple at offnum (1-based) into a B-tree page,
+// maintaining sorted order by shifting existing line pointers to the right.
+func (s *WalPageStore) ApplyBtreeInsert(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, offnum uint16, tupleData []byte, initPage, isLeaf bool, recLSN wal.LSN) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyBtreeInsert ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+
+	// Idempotency.
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+
+	if initPage {
+		// Initialise as a fresh B-tree page with the correct special space.
+		pageType := BTreeInternal
+		if isLeaf {
+			pageType = BTreeLeaf
+		}
+		fresh := NewBTreePage(pageType)
+		copy(pg.Bytes(), fresh.Page().Bytes())
+	}
+
+	// InsertTupleAt maintains sorted order — correct for B-tree pages where
+	// the item-pointer array must stay in key sequence.
+	if err := pg.InsertTupleAt(int(offnum)-1, tupleData); err != nil {
+		return fmt.Errorf("wal_apply: ApplyBtreeInsert InsertTupleAt: %w", err)
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// ApplyBtreeSplit initialises the new right page created by a B-tree split,
+// populates it with rightItems, and wires sibling chain pointers.
+func (s *WalPageStore) ApplyBtreeSplit(
+	loc wal.RelFileLocator, fork wal.ForkNum,
+	rightBlock, leftBlock, oldRight uint32,
+	level uint32, isLeaf bool,
+	rightItems []byte, recLSN wal.LSN,
+) error {
+	id, err := s.getBuffer(loc, fork, rightBlock)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyBtreeSplit ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+
+	// Idempotency.
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+
+	// Initialise the right page.
+	pageType := BTreeInternal
+	if isLeaf {
+		pageType = BTreeLeaf
+	}
+	fresh := NewBTreePage(pageType)
+
+	// Set the level explicitly (NewBTreePage uses the type's default level).
+	o := fresh.Opaque()
+	o.BtpoLevel = level
+	o.BtpoPrev = BlockNumber(leftBlock)
+	if oldRight == uint32(InvalidBlockNumber) {
+		o.BtpoNext = InvalidBlockNumber
+	} else {
+		o.BtpoNext = BlockNumber(oldRight)
+	}
+	fresh.setOpaque(o)
+
+	// Copy the initialised page into the buffer.
+	copy(pg.Bytes(), fresh.Page().Bytes())
+	bp := &BTreePage{page: pg}
+
+	// Append each item from rightItems.  Items are packed consecutively;
+	// each begins with an IndexTupleData header whose TInfo & indexSizeMask
+	// gives the total tuple byte count.
+	rem := rightItems
+	for len(rem) >= IndexTupleHeaderSize {
+		hdr := decodeIndexTuple(rem[:IndexTupleHeaderSize])
+		sz := int(hdr.TInfo & indexSizeMask)
+		if sz < IndexTupleHeaderSize || sz > len(rem) {
+			break
+		}
+		if _, err := bp.page.InsertTuple(rem[:sz]); err != nil {
+			return fmt.Errorf("wal_apply: ApplyBtreeSplit InsertTuple: %w", err)
+		}
+		rem = rem[sz:]
+	}
+
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
 // ── FPW restoration helper ────────────────────────────────────────────────────
 
 // restoreFPWBytes writes a BlockImage back into the raw 8 KB page slice.

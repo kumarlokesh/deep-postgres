@@ -260,11 +260,10 @@ func (p *Page) init() {
 	encodeHeader(p.data[:PageHeaderSize], &h)
 }
 
-// Bytes returns a copy of the raw page bytes.
+// Bytes returns a slice of the raw page bytes backed by the page's internal
+// buffer.  Callers that need an independent snapshot should copy the result.
 func (p *Page) Bytes() []byte {
-	cp := make([]byte, PageSize)
-	copy(cp, p.data[:])
-	return cp
+	return p.data[:]
 }
 
 // Header returns the decoded page header.
