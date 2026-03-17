@@ -263,3 +263,92 @@ func TestHintBitXminCommitted(t *testing.T) {
 		t.Errorf("expected VisVisible via hint bit, got %v", result)
 	}
 }
+
+// ── HeapTupleSatisfiesDirty ───────────────────────────────────────────────────
+
+func TestSatisfiesDirtyVisible(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(10)
+	hdr := makeHeader(10, InvalidTransactionId)
+	if r := HeapTupleSatisfiesDirty(hdr, oracle); !r.IsVisible() {
+		t.Errorf("committed xmin, no xmax: got %v", r)
+	}
+}
+
+func TestSatisfiesDirtyAbortedXmin(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Abort(10)
+	hdr := makeHeader(10, InvalidTransactionId)
+	if r := HeapTupleSatisfiesDirty(hdr, oracle); r.IsVisible() {
+		t.Errorf("aborted xmin should be invisible: got %v", r)
+	}
+}
+
+func TestSatisfiesDirtyDeleted(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(10)
+	oracle.Commit(20)
+	hdr := makeHeader(10, 20)
+	if r := HeapTupleSatisfiesDirty(hdr, oracle); r != VisDeleted {
+		t.Errorf("committed delete: got %v want VisDeleted", r)
+	}
+}
+
+func TestSatisfiesDirtyAbortedDelete(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(10)
+	oracle.Abort(20)
+	hdr := makeHeader(10, 20)
+	// Aborted delete: tuple is still live.
+	if r := HeapTupleSatisfiesDirty(hdr, oracle); !r.IsVisible() {
+		t.Errorf("aborted delete: got %v want visible", r)
+	}
+}
+
+// ── HeapTupleSatisfiesNow ─────────────────────────────────────────────────────
+
+func TestSatisfiesNowCommittedVisible(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(5)
+	hdr := makeHeader(5, InvalidTransactionId)
+	if r := HeapTupleSatisfiesNow(hdr, oracle); !r.IsVisible() {
+		t.Errorf("committed: got %v", r)
+	}
+}
+
+func TestSatisfiesNowInProgressInvisible(t *testing.T) {
+	oracle := NewSimpleOracle() // xid 5 is TxInProgress (default)
+	hdr := makeHeader(5, InvalidTransactionId)
+	if r := HeapTupleSatisfiesNow(hdr, oracle); r.IsVisible() {
+		t.Errorf("in-progress: should be invisible, got %v", r)
+	}
+}
+
+func TestSatisfiesNowCommittedDeletedInvisible(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(5)
+	oracle.Commit(6)
+	hdr := makeHeader(5, 6)
+	if r := HeapTupleSatisfiesNow(hdr, oracle); r != VisDeleted {
+		t.Errorf("committed delete: got %v want VisDeleted", r)
+	}
+}
+
+func TestSatisfiesNowInProgressDeleteVisible(t *testing.T) {
+	oracle := NewSimpleOracle()
+	oracle.Commit(5)
+	// xmax (6) is in-progress: deletion not yet committed, tuple still visible.
+	hdr := makeHeader(5, 6)
+	if r := HeapTupleSatisfiesNow(hdr, oracle); !r.IsVisible() {
+		t.Errorf("in-progress delete: got %v want visible", r)
+	}
+}
+
+// ── HeapTupleSatisfiesAny ─────────────────────────────────────────────────────
+
+func TestSatisfiesAny(t *testing.T) {
+	hdr := makeHeader(5, 6)
+	if r := HeapTupleSatisfiesAny(hdr); r != VisVisible {
+		t.Errorf("SatisfiesAny: got %v want VisVisible", r)
+	}
+}
