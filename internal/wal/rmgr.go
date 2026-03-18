@@ -59,6 +59,9 @@ type RedoContext struct {
 	// Store is the optional storage layer for page application.
 	// Nil when the engine is run without a storage backend (e.g. unit tests).
 	Store PageWriter
+	// Logical is the optional logical decoding layer.
+	// Nil when logical decoding is not enabled.
+	Logical LogicalDecoder
 }
 
 // RmgrOps is the set of callbacks registered by each resource manager.

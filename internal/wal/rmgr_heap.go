@@ -60,7 +60,7 @@ func decodeXLHeapInsert(data []byte) (xlHeapInsertData, error) {
 const xlHeapDeleteSize = 8
 
 type xlHeapDeleteData struct {
-	Xmax        uint32
+	Xmax         uint32
 	TargetOffnum uint16
 	InfobitsSet  uint8
 	Flags        uint8
@@ -120,6 +120,14 @@ func heapRedoInsert(ctx RedoContext) error {
 
 	initPage := rec.Header.XlInfo&xlHeapInitPage != 0
 
+	// Logical decoding: record the insert before applying it physically.
+	if ctx.Logical != nil {
+		ctx.Logical.OnInsert(
+			rec.Header.XlXid, ctx.LSN,
+			br.Reln, br.BlockNum, xlrec.Offnum, br.Data,
+		)
+	}
+
 	if ctx.Store == nil {
 		return nil
 	}
@@ -150,6 +158,14 @@ func heapRedoDelete(ctx RedoContext) error {
 	xlrec, err := decodeXLHeapDelete(rec.MainData)
 	if err != nil {
 		return err
+	}
+
+	// Logical decoding.
+	if ctx.Logical != nil {
+		ctx.Logical.OnDelete(
+			rec.Header.XlXid, ctx.LSN,
+			br.Reln, br.BlockNum, xlrec.TargetOffnum,
+		)
 	}
 
 	if ctx.Store == nil {

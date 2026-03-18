@@ -165,11 +165,11 @@ const (
 )
 
 const (
-	lpOffMask   = uint32(0x7FFF)       // bits 0-14
+	lpOffMask    = uint32(0x7FFF) // bits 0-14
 	lpFlagsShift = uint32(15)
-	lpFlagsMask = uint32(0x3)          // 2 bits
-	lpLenShift  = uint32(17)
-	lpLenMask   = uint32(0x7FFF)       // bits 17-31
+	lpFlagsMask  = uint32(0x3) // 2 bits
+	lpLenShift   = uint32(17)
+	lpLenMask    = uint32(0x7FFF) // bits 17-31
 )
 
 // NewItemId creates a normal line pointer for a tuple at the given page offset

@@ -4,9 +4,9 @@ import "testing"
 
 func TestTransactionIdChecks(t *testing.T) {
 	cases := []struct {
-		xid     TransactionId
-		valid   bool
-		normal  bool
+		xid    TransactionId
+		valid  bool
+		normal bool
 	}{
 		{InvalidTransactionId, false, false},
 		{BootstrapTransactionId, true, false},

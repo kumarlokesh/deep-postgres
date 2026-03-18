@@ -27,25 +27,25 @@ import (
 // ── Operation constants ────────────────────────────────────────────────────────
 
 const (
-	xlBtreeInsertLeaf  uint8 = 0x00
-	xlBtreeInsertUpper uint8 = 0x10
-	xlBtreeInsertMeta  uint8 = 0x20
-	xlBtreeSplitL      uint8 = 0x30
-	xlBtreeSplitR      uint8 = 0x40
-	xlBtreeSplitLRoot  uint8 = 0x50
-	xlBtreeSplitRRoot  uint8 = 0x60
-	xlBtreeVacuum      uint8 = 0x70
-	xlBtreeDelete      uint8 = 0x80
-	xlBtreeMarkHalfDead uint8 = 0x90
-	xlBtreeUnlinkPage  uint8 = 0xA0
+	xlBtreeInsertLeaf     uint8 = 0x00
+	xlBtreeInsertUpper    uint8 = 0x10
+	xlBtreeInsertMeta     uint8 = 0x20
+	xlBtreeSplitL         uint8 = 0x30
+	xlBtreeSplitR         uint8 = 0x40
+	xlBtreeSplitLRoot     uint8 = 0x50
+	xlBtreeSplitRRoot     uint8 = 0x60
+	xlBtreeVacuum         uint8 = 0x70
+	xlBtreeDelete         uint8 = 0x80
+	xlBtreeMarkHalfDead   uint8 = 0x90
+	xlBtreeUnlinkPage     uint8 = 0xA0
 	xlBtreeUnlinkPageMeta uint8 = 0xB0
-	xlBtreeNewroot     uint8 = 0xC0
-	xlBtreeReusePage   uint8 = 0xD0
-	xlBtreeMetaCleanup uint8 = 0xE0
-	xlBtreeInsertPost  uint8 = 0xF0
+	xlBtreeNewroot        uint8 = 0xC0
+	xlBtreeReusePage      uint8 = 0xD0
+	xlBtreeMetaCleanup    uint8 = 0xE0
+	xlBtreeInsertPost     uint8 = 0xF0
 
-	xlBtreeOpMask    uint8 = 0xF0 // mask for operation in high nibble
-	xlBtreeInitPage  uint8 = 0x08 // XLOG_BTREE_INIT_PAGE modifier (bit 3, low nibble)
+	xlBtreeOpMask   uint8 = 0xF0 // mask for operation in high nibble
+	xlBtreeInitPage uint8 = 0x08 // XLOG_BTREE_INIT_PAGE modifier (bit 3, low nibble)
 )
 
 // InvalidBlockNumber mirrors storage.InvalidBlockNumber for use in the WAL
@@ -83,10 +83,10 @@ func decodeXLBtreeInsert(data []byte) (xlBtreeInsertData, error) {
 const xlBtreeSplitSize = 10
 
 type xlBtreeSplitData struct {
-	Level        uint32
+	Level         uint32
 	FirstRightOff uint16
-	NewItemOff   uint16
-	PostingOff   uint16
+	NewItemOff    uint16
+	PostingOff    uint16
 }
 
 func decodeXLBtreeSplit(data []byte) (xlBtreeSplitData, error) {
@@ -160,9 +160,10 @@ func btreeRedoInsert(ctx RedoContext) error {
 // btreeRedoSplit handles SPLIT_L, SPLIT_R, SPLIT_L_ROOT, SPLIT_R_ROOT.
 //
 // PostgreSQL block reference layout for SPLIT:
-//   block ref 0: left page
-//   block ref 1: right page (the new page)
-//   block ref 2: right's former right sibling (optional; just updates BtpoPrev)
+//
+//	block ref 0: left page
+//	block ref 1: right page (the new page)
+//	block ref 2: right's former right sibling (optional; just updates BtpoPrev)
 func btreeRedoSplit(ctx RedoContext, op uint8) error {
 	rec := ctx.Rec
 	if len(rec.BlockRefs) < 2 {
@@ -217,9 +218,9 @@ func btreeRedoSplit(ctx RedoContext, op uint8) error {
 		}
 		if err := ctx.Store.ApplyBtreeSplit(
 			rightBR.Reln, rightBR.ForkNum,
-			rightBR.BlockNum,  // right block
-			leftBR.BlockNum,   // left block (left sibling)
-			oldRight,          // former right sibling
+			rightBR.BlockNum, // right block
+			leftBR.BlockNum,  // left block (left sibling)
+			oldRight,         // former right sibling
 			xlrec.Level, isLeaf,
 			rightBR.Data, // items to place on right page
 			ctx.LSN,

@@ -289,7 +289,7 @@ func TestAdvanceCommand(t *testing.T) {
 		t.Error("insert at CID 0 should be invisible when CurCid=0")
 	}
 
-	m.AdvanceCommand(txid) //nolint:errcheck
+	m.AdvanceCommand(txid)    //nolint:errcheck
 	snap1 := m.Snapshot(txid) // CurCid = 1
 	// Now CurCid = 1 > 0: tuple from CID 0 is visible.
 	if !storage.HeapTupleSatisfiesMVCC(hdr, snap1, m).IsVisible() {

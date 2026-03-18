@@ -21,7 +21,7 @@ import (
 // acquisition.
 type TransactionManager struct {
 	clog    *Clog
-	nextXid storage.TransactionId                   // next XID to assign
+	nextXid storage.TransactionId                       // next XID to assign
 	active  map[storage.TransactionId]storage.CommandId // xid → current CID
 }
 
@@ -85,9 +85,9 @@ func (m *TransactionManager) Status(xid storage.TransactionId) storage.Transacti
 // Snapshot captures the current transaction state as an MVCC snapshot.
 //
 // Mirrors PostgreSQL's GetSnapshotData (procarray.c):
-//   1. xmax = nextXid (no XID >= nextXid is visible)
-//   2. Collect all active XIDs into xip.
-//   3. xmin = min(active XIDs); if none, xmin = xmax.
+//  1. xmax = nextXid (no XID >= nextXid is visible)
+//  2. Collect all active XIDs into xip.
+//  3. xmin = min(active XIDs); if none, xmin = xmax.
 //
 // The caller's own XID (txid) is embedded in the snapshot so that
 // self-inserted tuples are handled correctly by HeapTupleSatisfiesMVCC.

@@ -18,9 +18,9 @@ package storage
 type TransactionId = uint32
 
 const (
-	InvalidTransactionId   TransactionId = 0
-	BootstrapTransactionId TransactionId = 1
-	FrozenTransactionId    TransactionId = 2
+	InvalidTransactionId     TransactionId = 0
+	BootstrapTransactionId   TransactionId = 1
+	FrozenTransactionId      TransactionId = 2
 	FirstNormalTransactionId TransactionId = 3
 )
 

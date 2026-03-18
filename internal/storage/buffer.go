@@ -70,9 +70,9 @@ type BufferDesc struct {
 	UsageCount uint8
 }
 
-func (d *BufferDesc) IsValid() bool  { return d.State&BmValid != 0 }
-func (d *BufferDesc) IsDirty() bool  { return d.State&BmDirty != 0 }
-func (d *BufferDesc) IsPinned() bool { return d.refcount.Load() > 0 }
+func (d *BufferDesc) IsValid() bool    { return d.State&BmValid != 0 }
+func (d *BufferDesc) IsDirty() bool    { return d.State&BmDirty != 0 }
+func (d *BufferDesc) IsPinned() bool   { return d.refcount.Load() > 0 }
 func (d *BufferDesc) PinCount() uint32 { return d.refcount.Load() }
 
 // Pin increments the reference count.
@@ -81,7 +81,7 @@ func (d *BufferDesc) Pin() { d.refcount.Add(1) }
 // Unpin decrements the reference count. Panics if already zero.
 func (d *BufferDesc) Unpin() {
 	prev := d.refcount.Add(^uint32(0)) // subtract 1
-	if prev == ^uint32(0) {             // wrapped (was 0)
+	if prev == ^uint32(0) {            // wrapped (was 0)
 		panic("unpin of buffer with zero pin count")
 	}
 }

@@ -257,9 +257,9 @@ func TestBtreeWalSplitRight(t *testing.T) {
 	// We construct three items for the right page and verify they land there.
 
 	type entry struct {
-		key     []byte
-		block   BlockNumber
-		off     OffsetNumber
+		key   []byte
+		block BlockNumber
+		off   OffsetNumber
 	}
 	rightEntries := []entry{
 		{[]byte{0, 0, 0, 4}, 14, 1},
@@ -275,10 +275,10 @@ func TestBtreeWalSplitRight(t *testing.T) {
 
 	// xl_btree_split main data (10 bytes).
 	mainData := make([]byte, 10)
-	binary.LittleEndian.PutUint32(mainData[0:], 0)  // level = 0 (leaf)
-	binary.LittleEndian.PutUint16(mainData[4:], 4)  // firstrightoff
-	binary.LittleEndian.PutUint16(mainData[6:], 0)  // newitemoff
-	binary.LittleEndian.PutUint16(mainData[8:], 0)  // postingoff
+	binary.LittleEndian.PutUint32(mainData[0:], 0) // level = 0 (leaf)
+	binary.LittleEndian.PutUint16(mainData[4:], 4) // firstrightoff
+	binary.LittleEndian.PutUint16(mainData[6:], 0) // newitemoff
+	binary.LittleEndian.PutUint16(mainData[8:], 0) // postingoff
 
 	const leftBlock = uint32(1)
 	const rightBlock = uint32(2)

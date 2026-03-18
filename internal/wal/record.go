@@ -99,9 +99,9 @@ const (
 type BimgInfo uint8
 
 const (
-	BimgHasHole     BimgInfo = 0x01 // image has a hole (unchanged region)
+	BimgHasHole      BimgInfo = 0x01 // image has a hole (unchanged region)
 	BimgIsCompressed BimgInfo = 0x02 // image data is compressed
-	BimgApply       BimgInfo = 0x04 // apply during recovery
+	BimgApply        BimgInfo = 0x04 // apply during recovery
 )
 
 // BlockImage is an optional full-page write stored within a block reference.

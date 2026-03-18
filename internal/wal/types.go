@@ -132,27 +132,27 @@ func MaxAlignedSize(n uint32) uint32 {
 type RmgrID uint8
 
 const (
-	RmgrXlog    RmgrID = 0  // xlog (checkpoint, switch, backup)
-	RmgrXact    RmgrID = 1  // transaction commit/abort
-	RmgrSmgr    RmgrID = 2  // storage manager
-	RmgrClog    RmgrID = 3  // commit log
-	RmgrDatabase RmgrID = 4 // database operations
+	RmgrXlog       RmgrID = 0 // xlog (checkpoint, switch, backup)
+	RmgrXact       RmgrID = 1 // transaction commit/abort
+	RmgrSmgr       RmgrID = 2 // storage manager
+	RmgrClog       RmgrID = 3 // commit log
+	RmgrDatabase   RmgrID = 4 // database operations
 	RmgrTablespace RmgrID = 5
-	RmgrMultixact RmgrID = 6
-	RmgrRelMap   RmgrID = 7
-	RmgrStandby  RmgrID = 8
-	RmgrHeap2    RmgrID = 9  // heap (extended ops: HOT, lock)
-	RmgrHeap    RmgrID = 10  // heap (insert, delete, update)
-	RmgrBtree   RmgrID = 11  // nbtree index
-	RmgrHash    RmgrID = 12
-	RmgrGin     RmgrID = 13
-	RmgrGist    RmgrID = 14
-	RmgrSeq     RmgrID = 15
-	RmgrSpgist  RmgrID = 16
-	RmgrBrin    RmgrID = 17
-	RmgrCommitTs RmgrID = 18
-	RmgrLogical RmgrID = 19  // logical decoding / replication origin
-	RmgrMax     RmgrID = 20
+	RmgrMultixact  RmgrID = 6
+	RmgrRelMap     RmgrID = 7
+	RmgrStandby    RmgrID = 8
+	RmgrHeap2      RmgrID = 9  // heap (extended ops: HOT, lock)
+	RmgrHeap       RmgrID = 10 // heap (insert, delete, update)
+	RmgrBtree      RmgrID = 11 // nbtree index
+	RmgrHash       RmgrID = 12
+	RmgrGin        RmgrID = 13
+	RmgrGist       RmgrID = 14
+	RmgrSeq        RmgrID = 15
+	RmgrSpgist     RmgrID = 16
+	RmgrBrin       RmgrID = 17
+	RmgrCommitTs   RmgrID = 18
+	RmgrLogical    RmgrID = 19 // logical decoding / replication origin
+	RmgrMax        RmgrID = 20
 )
 
 // rmgrNames maps RmgrID to a human-readable name for diagnostic output.
@@ -216,30 +216,33 @@ const MaxBlockID = 32
 
 // XLogRecordHeaderSize is the fixed byte size of XLogRecord.
 // Computed from the struct layout:
-//   xl_tot_len  uint32 = 4
-//   xl_xid      uint32 = 4
-//   xl_prev     uint64 = 8  (LSN)
-//   xl_info     uint8  = 1
-//   xl_rmid     uint8  = 1
-//   padding     uint16 = 2
-//   xl_crc      uint32 = 4
-//   total              = 24
+//
+//	xl_tot_len  uint32 = 4
+//	xl_xid      uint32 = 4
+//	xl_prev     uint64 = 8  (LSN)
+//	xl_info     uint8  = 1
+//	xl_rmid     uint8  = 1
+//	padding     uint16 = 2
+//	xl_crc      uint32 = 4
+//	total              = 24
 const XLogRecordHeaderSize = 24
 
 // XLogBlockHeaderSize is the fixed part of XLogRecordBlockHeader (without
 // optional image or reln fields).
-//   id          uint8  = 1
-//   fork_flags  uint8  = 1
-//   data_length uint16 = 2
-//   total                = 4
+//
+//	id          uint8  = 1
+//	fork_flags  uint8  = 1
+//	data_length uint16 = 2
+//	total                = 4
 const XLogBlockHeaderSize = 4
 
 // XLogBlockImageHeaderSize is the size of XLogRecordBlockImageHeader.
-//   length      uint16 = 2
-//   hole_offset uint16 = 2
-//   bimg_info   uint8  = 1
-//   hole_length uint8  = 1 (compressed encoding, else derives from length/PageSize)
-//   total              = 6
+//
+//	length      uint16 = 2
+//	hole_offset uint16 = 2
+//	bimg_info   uint8  = 1
+//	hole_length uint8  = 1 (compressed encoding, else derives from length/PageSize)
+//	total              = 6
 const XLogBlockImageHeaderSize = 6
 
 // ── Sentinel ─────────────────────────────────────────────────────────────────

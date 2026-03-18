@@ -264,9 +264,9 @@ func TestEncodeDecodeBlockImage(t *testing.T) {
 		LSN:    MakeLSN(0, 0x4000),
 		BlockRefs: []BlockRef{
 			{
-				ID:      0,
-				Reln:    reln,
-				ForkNum: ForkMain,
+				ID:       0,
+				Reln:     reln,
+				ForkNum:  ForkMain,
 				BlockNum: 3,
 				Image: &BlockImage{
 					Length:     4096,

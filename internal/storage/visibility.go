@@ -95,12 +95,12 @@ func (s *Snapshot) XidVisible(xid TransactionId) bool {
 type VisibilityResult int
 
 const (
-	VisVisible       VisibilityResult = iota // tuple visible to snapshot
-	VisInvisible                             // inserted by uncommitted/aborted xact
-	VisDeleted                               // deleted and deletion is visible
-	VisBeingDeleted                          // current xact is deleting it
-	VisInsertedBySelf                        // inserted by current xact, visible
-	VisDeletedBySelf                         // deleted by current xact
+	VisVisible        VisibilityResult = iota // tuple visible to snapshot
+	VisInvisible                              // inserted by uncommitted/aborted xact
+	VisDeleted                                // deleted and deletion is visible
+	VisBeingDeleted                           // current xact is deleting it
+	VisInsertedBySelf                         // inserted by current xact, visible
+	VisDeletedBySelf                          // deleted by current xact
 )
 
 // IsVisible reports whether the result means the tuple should be returned.

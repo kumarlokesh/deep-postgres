@@ -54,14 +54,14 @@ type BTPageOpaqueData struct {
 type BTreePageFlags uint16
 
 const (
-	BTPLeaf             BTreePageFlags = 1 << 0 // leaf page
-	BTPRoot             BTreePageFlags = 1 << 1 // root page
-	BTPDeleted          BTreePageFlags = 1 << 2 // deleted (on freelist)
-	BTPMeta             BTreePageFlags = 1 << 3 // meta page
-	BTPHalfDead         BTreePageFlags = 1 << 4 // half-dead (being deleted)
-	BTPSplitEnd         BTreePageFlags = 1 << 5 // split, follow right link
-	BTPHasGarbage       BTreePageFlags = 1 << 6 // has LP_DEAD items
-	BTPIncomplete       BTreePageFlags = 1 << 7 // incomplete split
+	BTPLeaf       BTreePageFlags = 1 << 0 // leaf page
+	BTPRoot       BTreePageFlags = 1 << 1 // root page
+	BTPDeleted    BTreePageFlags = 1 << 2 // deleted (on freelist)
+	BTPMeta       BTreePageFlags = 1 << 3 // meta page
+	BTPHalfDead   BTreePageFlags = 1 << 4 // half-dead (being deleted)
+	BTPSplitEnd   BTreePageFlags = 1 << 5 // split, follow right link
+	BTPHasGarbage BTreePageFlags = 1 << 6 // has LP_DEAD items
+	BTPIncomplete BTreePageFlags = 1 << 7 // incomplete split
 )
 
 // BTreePageType describes the role of a B-tree page.
@@ -158,8 +158,8 @@ func NewIndexTuple(heapBlock BlockNumber, heapOffset OffsetNumber, size uint16) 
 	}
 }
 
-func (t *IndexTupleData) Size() uint16     { return t.TInfo & indexSizeMask }
-func (t *IndexTupleData) HasNulls() bool   { return t.TInfo&indexNullMask != 0 }
+func (t *IndexTupleData) Size() uint16      { return t.TInfo & indexSizeMask }
+func (t *IndexTupleData) HasNulls() bool    { return t.TInfo&indexNullMask != 0 }
 func (t *IndexTupleData) HasVarWidth() bool { return t.TInfo&indexVarMask != 0 }
 func (t *IndexTupleData) HeapTid() (BlockNumber, OffsetNumber) {
 	return t.TTidBlock, t.TTidOffset
