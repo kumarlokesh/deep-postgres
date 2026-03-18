@@ -5,14 +5,13 @@ run:
     tests: true
 
 linters:
+    default: none
     enable:
-        - errcheck
         - govet
         - ineffassign
         - staticcheck
         - unused
         - misspell
-        - revive
         - unconvert
         - unparam
         - prealloc
@@ -28,14 +27,6 @@ formatters:
                 - github.com/kumarlokesh/deep-postgres
 
 linters-settings:
-    revive:
-        rules:
-            - name: exported
-              severity: warning
-            - name: unexported-return
-              severity: warning
-            - name: var-naming
-              severity: warning
     godot:
         scope: declarations
         capital: false

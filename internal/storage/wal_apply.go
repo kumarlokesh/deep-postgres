@@ -50,7 +50,7 @@ func (s *WalPageStore) relOid(loc wal.RelFileLocator) Oid {
 	// Register with the buffer pool so evictions can be written back.
 	if s.smgr != nil {
 		// storage.RelFileNode has only DbId and RelId (no tablespace).
-		node := RelFileNode{DbId: Oid(loc.DbOid), RelId: Oid(loc.RelOid)}
+		node := RelFileNode{DbId: loc.DbOid, RelId: loc.RelOid}
 		s.pool.RegisterRelation(id, node, s.smgr)
 	}
 	return id
@@ -65,7 +65,7 @@ func (s *WalPageStore) getBuffer(loc wal.RelFileLocator, fork wal.ForkNum, block
 	tag := BufferTag{
 		RelationId: s.relOid(loc),
 		Fork:       forkNum(fork),
-		BlockNum:   BlockNumber(block),
+		BlockNum:   block,
 	}
 	return s.pool.ReadBuffer(tag)
 }
@@ -231,11 +231,11 @@ func (s *WalPageStore) ApplyBtreeSplit(
 	// Set the level explicitly (NewBTreePage uses the type's default level).
 	o := fresh.Opaque()
 	o.BtpoLevel = level
-	o.BtpoPrev = BlockNumber(leftBlock)
-	if oldRight == uint32(InvalidBlockNumber) {
+	o.BtpoPrev = leftBlock
+	if oldRight == InvalidBlockNumber {
 		o.BtpoNext = InvalidBlockNumber
 	} else {
-		o.BtpoNext = BlockNumber(oldRight)
+		o.BtpoNext = oldRight
 	}
 	fresh.setOpaque(o)
 

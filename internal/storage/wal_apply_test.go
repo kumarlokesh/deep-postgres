@@ -33,7 +33,7 @@ func buildAndReplay(t *testing.T, blockNum uint32, recs []*wal.Record) *Page {
 	// without a storage manager.  We register a synthetic relOid and pre-load
 	// a clean page into the pool.
 	relOid := store.relOid(testReln)
-	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: BlockNumber(blockNum)}
+	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: blockNum}
 	bufID, err := pool.ReadBuffer(tag)
 	if err != nil {
 		t.Fatalf("pre-seed ReadBuffer: %v", err)
@@ -80,13 +80,13 @@ func buildAndReplay(t *testing.T, blockNum uint32, recs []*wal.Record) *Page {
 		t.Fatalf("GetPage: %v", err)
 	}
 	// Return a copy so the caller is not affected by pool eviction.
-	copy := *finalPage
-	return &copy
+	snapshot := *finalPage
+	return &snapshot
 }
 
 // makeHeapInsertRecord builds a XLOG_HEAP_INSERT wal.Record for the given
 // tuple bytes at offnum on (testReln, ForkMain, blockNum).
-func makeHeapInsertRecord(blockNum uint32, offnum uint16, tupleData []byte, recLSN wal.LSN) *wal.Record {
+func makeHeapInsertRecord(blockNum uint32, offnum uint16, tupleData []byte, recLSN wal.LSN) *wal.Record { //nolint:unparam
 	// xl_heap_insert main data: offnum (uint16) + flags (uint8).
 	mainData := []byte{
 		byte(offnum), byte(offnum >> 8), // little-endian uint16

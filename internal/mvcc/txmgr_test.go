@@ -254,7 +254,7 @@ func TestVisibilitySelfInsert(t *testing.T) {
 	txid := m.Begin()
 
 	hdr := makeTestHeader(txid, storage.InvalidTransactionId) // TCid = 0
-	m.AdvanceCommand(txid)                                    //nolint:errcheck — now CurCid = 1
+	m.AdvanceCommand(txid)                                    //nolint:errcheck // now CurCid = 1
 	snap := m.Snapshot(txid)                                  // CurCid = 1 > TCid = 0
 
 	result := storage.HeapTupleSatisfiesMVCC(hdr, snap, m)
@@ -268,7 +268,7 @@ func TestVisibilitySelfDelete(t *testing.T) {
 	txid := m.Begin()
 
 	hdr := makeTestHeader(txid, txid) // TCid = 0, xmax = self
-	m.AdvanceCommand(txid)            //nolint:errcheck — CurCid = 1
+	m.AdvanceCommand(txid)            //nolint:errcheck // CurCid = 1
 	snap := m.Snapshot(txid)
 
 	result := storage.HeapTupleSatisfiesMVCC(hdr, snap, m)

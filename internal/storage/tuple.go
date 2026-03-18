@@ -85,7 +85,7 @@ type HeapTupleHeader struct {
 	TInfomask2  uint16
 	TInfomask   uint16
 	THoff       uint8
-	_pad        uint8 //nolint:structcheck // alignment padding to reach 24 bytes
+	_pad        uint8 //nolint:unused // alignment padding to reach 24 bytes
 }
 
 // NewHeapTupleHeader creates a header for a freshly-inserted tuple.

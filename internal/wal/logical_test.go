@@ -74,7 +74,7 @@ func makeHeapDeleteRecordWithXid(xid uint32, block uint32, offnum uint16) *Recor
 
 // runLogical builds a one-segment WAL stream from recs and replays it with a
 // ReorderBuffer, returning the buffer and emitted changes in order.
-func runLogical(t *testing.T, recs []*Record) (*ReorderBuffer, [][]Change) {
+func runLogical(t *testing.T, recs []*Record) [][]Change {
 	t.Helper()
 	var committed [][]Change
 
@@ -104,7 +104,7 @@ func runLogical(t *testing.T, recs []*Record) (*ReorderBuffer, [][]Change) {
 	if err := engine.Run(); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	return rb, committed
+	return committed
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ func TestLogicalSingleInsertCommit(t *testing.T) {
 	const xid = uint32(10)
 	tuple := []byte("hello logical world")
 
-	_, committed := runLogical(t, []*Record{
+	committed := runLogical(t, []*Record{
 		makeHeapInsertRecordWithXid(xid, 0, 1, tuple),
 		makeXactCommitRecord(xid),
 	})
@@ -144,7 +144,7 @@ func TestLogicalAbortedTransactionNotEmitted(t *testing.T) {
 	const xid = uint32(20)
 	tuple := []byte("should not appear")
 
-	_, committed := runLogical(t, []*Record{
+	committed := runLogical(t, []*Record{
 		makeHeapInsertRecordWithXid(xid, 0, 1, tuple),
 		{
 			Header: XLogRecord{XlRmid: RmgrXact, XlXid: xid, XlInfo: xlXactAbort},
@@ -170,7 +170,7 @@ func TestLogicalMultipleInsertsInTransaction(t *testing.T) {
 	}
 	recs = append(recs, makeXactCommitRecord(xid))
 
-	_, committed := runLogical(t, recs)
+	committed := runLogical(t, recs)
 
 	if len(committed) != 1 {
 		t.Fatalf("committed txns: got %d want 1", len(committed))
@@ -193,7 +193,7 @@ func TestLogicalInsertThenDelete(t *testing.T) {
 	const xid = uint32(40)
 	tuple := []byte("to be deleted")
 
-	_, committed := runLogical(t, []*Record{
+	committed := runLogical(t, []*Record{
 		makeHeapInsertRecordWithXid(xid, 0, 1, tuple),
 		makeHeapDeleteRecordWithXid(xid, 0, 1),
 		makeXactCommitRecord(xid),
@@ -222,7 +222,7 @@ func TestLogicalInterleavedTransactions(t *testing.T) {
 	const xidA = uint32(50)
 	const xidB = uint32(51)
 
-	_, committed := runLogical(t, []*Record{
+	committed := runLogical(t, []*Record{
 		makeHeapInsertRecordWithXid(xidA, 0, 1, []byte("A-first")),
 		makeHeapInsertRecordWithXid(xidB, 1, 1, []byte("B-first")),
 		makeHeapInsertRecordWithXid(xidA, 0, 2, []byte("A-second")),

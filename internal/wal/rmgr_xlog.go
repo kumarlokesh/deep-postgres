@@ -28,7 +28,7 @@ const (
 	xlogOverwrite          uint8 = 0xB0
 )
 
-func xlogRedo(ctx RedoContext) error {
+func xlogRedo(_ RedoContext) error {
 	// All XLOG records are safe to skip for page-level redo.
 	// Checkpoint handling (updating redo LSN, clearing hint-bit tracking)
 	// would belong here in a full implementation.

@@ -167,7 +167,9 @@ func (r *Record) String() string {
 // Encode serialises rec into a byte slice padded to XLogRecordAlignment.
 // It computes and fills XlTotLen and XlCrc.
 func Encode(rec *Record) ([]byte, error) {
-	var body []byte
+	// Estimate: header-per-block ≈ 18 bytes + data, plus main data.
+	estPerBlock := 18
+	body := make([]byte, 0, len(rec.BlockRefs)*estPerBlock+len(rec.MainData)+1)
 
 	prevReln := RelFileLocator{}
 	hasPrev := false

@@ -173,7 +173,7 @@ func (idx *BTreeIndex) Insert(key []byte, heapBlock BlockNumber, heapOffset Offs
 
 // findLeaf descends from rootBlk at tree level rootLevel, returning the
 // descent path (parent block+position pairs) and the leaf block number.
-func (idx *BTreeIndex) findLeaf(rootBlk BlockNumber, rootLevel uint32, key []byte) ([]btreePath, BlockNumber, error) {
+func (idx *BTreeIndex) findLeaf(rootBlk BlockNumber, _ uint32, key []byte) ([]btreePath, BlockNumber, error) {
 	var path []btreePath
 	blk := rootBlk
 
@@ -276,7 +276,7 @@ func (idx *BTreeIndex) insertAtLeaf(path []btreePath, leafBlk BlockNumber, key [
 // parent (or creates a new root).
 func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *BTreePage, insertPos int, key []byte, heapBlock BlockNumber, heapOffset OffsetNumber) error {
 	n := leftBP.NumEntries()
-	splitPos := n / 2 // entries [0, splitPos) stay; [splitPos, n) move right
+	var splitPos int // entries [0, splitPos) stay; [splitPos, n) move right
 
 	// Collect all entries that will remain on the left page, plus the new one.
 	type entry struct {
@@ -518,18 +518,24 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 	}
 
 	for i := 0; i < splitPos; i++ {
-		newLeft.InsertEntrySortedAt(i, all[i].key, all[i].block, all[i].off)
+		if err := newLeft.InsertEntrySortedAt(i, all[i].key, all[i].block, all[i].off); err != nil {
+			return err
+		}
 	}
 	// Skip splitPos (it moves up as the separator).
 	for i := splitPos + 1; i < total; i++ {
-		newRight.InsertEntrySortedAt(i-splitPos-1, all[i].key, all[i].block, all[i].off)
+		if err := newRight.InsertEntrySortedAt(i-splitPos-1, all[i].key, all[i].block, all[i].off); err != nil {
+			return err
+		}
 	}
 
 	leftOldOpaque := leftBP.Opaque()
 	newRight.SetSiblings(leftBlk, leftOldOpaque.BtpoNext)
 	newLeft.SetSiblings(leftOldOpaque.BtpoPrev, rightBlk)
 	if leftOldOpaque.BtpoNext != InvalidBlockNumber {
-		idx.updateLeftSibling(leftOldOpaque.BtpoNext, rightBlk)
+		if err := idx.updateLeftSibling(leftOldOpaque.BtpoNext, rightBlk); err != nil {
+			return err
+		}
 	}
 
 	leftId, err := idx.rel.ReadBlock(ForkMain, leftBlk)

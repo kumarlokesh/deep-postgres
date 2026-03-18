@@ -292,6 +292,7 @@ func TestEncodeDecodeBlockImage(t *testing.T) {
 	im := got.BlockRefs[0].Image
 	if im == nil {
 		t.Fatal("expected non-nil Image")
+		return
 	}
 	if im.Length != 4096 {
 		t.Errorf("Length: got %d want 4096", im.Length)
@@ -461,6 +462,7 @@ func TestSegmentReaderCrossPageRecord(t *testing.T) {
 	}
 	if rec == nil {
 		t.Fatal("got nil record")
+		return
 	}
 	if rec.LSN != wantLSNs[0] {
 		t.Errorf("LSN: got %s want %s", rec.LSN, wantLSNs[0])

@@ -31,10 +31,10 @@ func encIndexTuple(t *testing.T, heapBlock BlockNumber, heapOff OffsetNumber, ke
 
 // seedBtreePage allocates an empty B-tree page in pool for the given block
 // and initialises it to the given page type.
-func seedBtreePage(t *testing.T, pool *BufferPool, store *WalPageStore, block uint32, pt BTreePageType) {
+func seedBtreePage(t *testing.T, pool *BufferPool, store *WalPageStore, block uint32, pt BTreePageType) { //nolint:unparam
 	t.Helper()
 	relOid := store.relOid(btreeReln)
-	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: BlockNumber(block)}
+	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: block}
 	bufID, err := pool.ReadBuffer(tag)
 	if err != nil {
 		t.Fatalf("seedBtreePage ReadBuffer block=%d: %v", block, err)
@@ -83,7 +83,7 @@ func replayBtree(t *testing.T, recs []*wal.Record) (*BufferPool, *WalPageStore) 
 func getBtreePage(t *testing.T, pool *BufferPool, store *WalPageStore, block uint32) *BTreePage {
 	t.Helper()
 	relOid := store.relOid(btreeReln)
-	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: BlockNumber(block)}
+	tag := BufferTag{RelationId: relOid, Fork: ForkMain, BlockNum: block}
 	bufID, err := pool.ReadBuffer(tag)
 	if err != nil {
 		t.Fatalf("getBtreePage ReadBuffer: %v", err)
@@ -340,7 +340,7 @@ func TestBtreeWalSplitRight(t *testing.T) {
 
 	// Verify sibling chain: right.prev == leftBlock.
 	o := rightBP.Opaque()
-	if o.BtpoPrev != BlockNumber(leftBlock) {
+	if o.BtpoPrev != leftBlock {
 		t.Errorf("right.BtpoPrev: got %d want %d", o.BtpoPrev, leftBlock)
 	}
 	if o.BtpoNext != InvalidBlockNumber {

@@ -182,7 +182,7 @@ func btreeRedoSplit(ctx RedoContext, op uint8) error {
 	isRoot := op == xlBtreeSplitLRoot || op == xlBtreeSplitRRoot
 
 	// Determine old right sibling block number from block ref 2 if present.
-	oldRight := uint32(btreeInvalidBlock)
+	oldRight := btreeInvalidBlock
 	if len(rec.BlockRefs) >= 3 {
 		oldRight = rec.BlockRefs[2].BlockNum
 	}

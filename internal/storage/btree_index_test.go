@@ -42,14 +42,14 @@ func newTestBTreeIndex(t *testing.T) (*BTreeIndex, *Relation, func()) {
 func insertRange(t *testing.T, idx *BTreeIndex, lo, hi uint32) {
 	t.Helper()
 	for i := lo; i < hi; i++ {
-		if err := idx.Insert(encKey(i), BlockNumber(i), 1); err != nil {
+		if err := idx.Insert(encKey(i), i, 1); err != nil {
 			t.Fatalf("Insert(%d): %v", i, err)
 		}
 	}
 }
 
 // searchAll verifies that every key in [lo, hi) is found with the expected TID.
-func searchAll(t *testing.T, idx *BTreeIndex, lo, hi uint32) {
+func searchAll(t *testing.T, idx *BTreeIndex, lo, hi uint32) { //nolint:unparam
 	t.Helper()
 	for i := lo; i < hi; i++ {
 		blk, off, found, err := idx.Search(encKey(i))
@@ -60,7 +60,7 @@ func searchAll(t *testing.T, idx *BTreeIndex, lo, hi uint32) {
 			t.Errorf("key %d not found", i)
 			continue
 		}
-		if blk != BlockNumber(i) || off != 1 {
+		if blk != i || off != 1 {
 			t.Errorf("key %d: got (%d,%d), want (%d,1)", i, blk, off, i)
 		}
 	}
@@ -87,7 +87,7 @@ func TestBTreeIndexSinglePageReverseOrder(t *testing.T) {
 
 	const n = 50
 	for i := uint32(n - 1); i < n; i-- { // safe unsigned loop: exits when i wraps
-		if err := idx.Insert(encKey(i), BlockNumber(i), 1); err != nil {
+		if err := idx.Insert(encKey(i), i, 1); err != nil {
 			t.Fatalf("Insert(%d): %v", i, err)
 		}
 		if i == 0 {
@@ -143,7 +143,7 @@ func TestBTreeIndexLeafSplitReverseOrder(t *testing.T) {
 
 	const n = 600
 	for i := uint32(n - 1); ; i-- {
-		if err := idx.Insert(encKey(i), BlockNumber(i), 1); err != nil {
+		if err := idx.Insert(encKey(i), i, 1); err != nil {
 			t.Fatalf("Insert(%d): %v", i, err)
 		}
 		if i == 0 {
@@ -312,7 +312,7 @@ func TestBTreeIndexDuplicateKeys(t *testing.T) {
 
 	key := encKey(42)
 	for i := uint32(0); i < 5; i++ {
-		if err := idx.Insert(key, BlockNumber(i), OffsetNumber(i+1)); err != nil {
+		if err := idx.Insert(key, i, OffsetNumber(i+1)); err != nil {
 			t.Fatalf("Insert dup %d: %v", i, err)
 		}
 	}
@@ -335,12 +335,12 @@ func TestBTreeIndexInterleaved(t *testing.T) {
 	const n = 400
 	// Insert evens first, then odds.
 	for i := uint32(0); i < n; i += 2 {
-		if err := idx.Insert(encKey(i), BlockNumber(i), 1); err != nil {
+		if err := idx.Insert(encKey(i), i, 1); err != nil {
 			t.Fatalf("Insert(even %d): %v", i, err)
 		}
 	}
 	for i := uint32(1); i < n; i += 2 {
-		if err := idx.Insert(encKey(i), BlockNumber(i), 1); err != nil {
+		if err := idx.Insert(encKey(i), i, 1); err != nil {
 			t.Fatalf("Insert(odd %d): %v", i, err)
 		}
 	}
