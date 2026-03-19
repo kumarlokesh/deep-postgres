@@ -619,6 +619,81 @@ func (idx *BTreeIndex) Search(key []byte) (BlockNumber, OffsetNumber, bool, erro
 	return blk, off, true, nil
 }
 
+// HeapTID is a heap tuple identifier: the physical location of a heap tuple.
+type HeapTID struct {
+	Block  BlockNumber
+	Offset OffsetNumber // 1-based, PostgreSQL convention
+}
+
+// SearchAll returns all index entries whose key equals key, across all leaf
+// pages (following BtpoNext sibling links until the key no longer matches).
+// Duplicate keys are returned in the order they were inserted.
+func (idx *BTreeIndex) SearchAll(key []byte) ([]HeapTID, error) {
+	meta, err := idx.readMeta()
+	if err != nil {
+		return nil, err
+	}
+	_, leafBlk, err := idx.findLeaf(meta.Root, meta.Level, key)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []HeapTID
+
+	for leafBlk != InvalidBlockNumber {
+		id, err := idx.rel.ReadBlock(ForkMain, leafBlk)
+		if err != nil {
+			return nil, err
+		}
+		page, err := idx.rel.Pool.GetPage(id)
+		if err != nil {
+			idx.rel.Pool.UnpinBuffer(id) //nolint:errcheck
+			return nil, err
+		}
+		bp, err := BTreePageFromPage(page)
+		if err != nil {
+			idx.rel.Pool.UnpinBuffer(id) //nolint:errcheck
+			return nil, err
+		}
+
+		opaque := bp.Opaque()
+		nextBlk := opaque.BtpoNext
+
+		// Find the first matching position on this page.
+		pos := bp.SearchLeaf(func(ek []byte) int { return idx.cmp(ek, key) })
+
+		// Collect consecutive matching entries.
+		n := bp.NumEntries()
+		foundAny := false
+		for i := pos; i < n; i++ {
+			k, blk, off, err := bp.GetEntry(i)
+			if err != nil {
+				idx.rel.Pool.UnpinBuffer(id) //nolint:errcheck
+				return nil, err
+			}
+			if idx.cmp(k, key) != 0 {
+				// Past all matches on this page; no need to follow sibling.
+				idx.rel.Pool.UnpinBuffer(id) //nolint:errcheck
+				return results, nil
+			}
+			results = append(results, HeapTID{Block: blk, Offset: off})
+			foundAny = true
+		}
+
+		idx.rel.Pool.UnpinBuffer(id) //nolint:errcheck
+
+		if !foundAny {
+			// No matches on this page; key is not in the index.
+			break
+		}
+
+		// The page was exhausted; matches may continue on the right sibling.
+		leafBlk = nextBlk
+	}
+
+	return results, nil
+}
+
 // ── BTreePage sorted-insert helper ──────────────────────────────────────────
 
 // InsertEntrySortedAt inserts an index entry at the given position, shifting

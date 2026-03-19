@@ -434,6 +434,18 @@ func (p *Page) MarkDead(i int) error {
 	return nil
 }
 
+// SetItemIdRedirect rewrites the line pointer at 0-based index i as an
+// LP_REDIRECT pointing at targetOffset (1-based OffsetNumber of the chain
+// head on the same page).  Used to simulate HOT chain pruning in tests.
+func (p *Page) SetItemIdRedirect(i int, targetOffset uint16) error {
+	if i < 0 || i >= p.ItemCount() {
+		return errInvalidItemIndex(i)
+	}
+	off := itemIdOffset(i)
+	encodeItemId(p.data[off:off+ItemIdSize], NewItemIdRedirect(targetOffset))
+	return nil
+}
+
 // Validate checks page header consistency.
 func (p *Page) Validate() error {
 	h := p.Header()
