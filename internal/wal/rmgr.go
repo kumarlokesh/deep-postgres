@@ -48,6 +48,15 @@ type PageWriter interface {
 	// isLeaf     — true if the right page is a leaf
 	// rightItems — raw index-tuple bytes to place on the right page (in order)
 	ApplyBtreeSplit(loc RelFileLocator, fork ForkNum, rightBlock, leftBlock, oldRight uint32, level uint32, isLeaf bool, rightItems []byte, recLSN LSN) error
+
+	// ApplyUpdate applies a heap UPDATE record.
+	// xid is the updating transaction (set as xmax on the old tuple).
+	// oldBlock/newBlock — may be identical for a HOT update.
+	// oldOffnum/newOffnum — 1-based offset numbers.
+	// newTupleData — raw bytes of the new HeapTuple.
+	// isHot — true when old and new tuples are on the same page.
+	// initNewPage — true when the new block must be initialised before insert.
+	ApplyUpdate(loc RelFileLocator, fork ForkNum, xid uint32, oldBlock, newBlock uint32, oldOffnum, newOffnum uint16, newTupleData []byte, isHot, initNewPage bool, recLSN LSN) error
 }
 
 // RedoContext carries the per-record context passed to RmgrOps.Redo.

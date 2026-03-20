@@ -159,6 +159,160 @@ func (s *WalPageStore) ApplyDelete(loc wal.RelFileLocator, fork wal.ForkNum, blo
 	return nil
 }
 
+// ApplyUpdate applies a heap UPDATE: overwrites the old tuple header (xmax,
+// infomask flags, t_ctid) and inserts the new tuple on the target block.
+// For HOT updates (isHot=true) both are on the same page and handled with a
+// single buffer pin.  For cross-page updates two buffer operations are used.
+func (s *WalPageStore) ApplyUpdate(
+	loc wal.RelFileLocator, fork wal.ForkNum,
+	xid uint32,
+	oldBlock, newBlock uint32,
+	oldOffnum, newOffnum uint16,
+	newTupleData []byte,
+	isHot, initNewPage bool,
+	recLSN wal.LSN,
+) error {
+	if isHot {
+		return s.applyUpdateSamePage(loc, fork, xid, oldBlock, oldOffnum, newOffnum, newTupleData, recLSN)
+	}
+	// Cross-page: update old tuple first, then insert new tuple.
+	if err := s.applyUpdateOldPage(loc, fork, xid, oldBlock, newBlock, oldOffnum, newOffnum, recLSN); err != nil {
+		return err
+	}
+	return s.applyUpdateNewPage(loc, fork, newBlock, newOffnum, newTupleData, initNewPage, recLSN)
+}
+
+// applyUpdateSamePage handles a HOT update where old and new tuples share a page.
+func (s *WalPageStore) applyUpdateSamePage(
+	loc wal.RelFileLocator, fork wal.ForkNum,
+	xid uint32,
+	block uint32, oldOffnum, newOffnum uint16,
+	newTupleData []byte, recLSN wal.LSN,
+) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate(HOT) ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil // idempotent
+	}
+
+	// Update old tuple header in-place.
+	if err := s.updateOldTupleHeader(pg, xid, oldOffnum, block, newOffnum, true); err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate(HOT) old header: %w", err)
+	}
+
+	// Insert new tuple.
+	got, err := pg.InsertTuple(newTupleData)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate(HOT) InsertTuple: %w", err)
+	}
+	if want := int(newOffnum) - 1; got != want {
+		return fmt.Errorf("wal_apply: ApplyUpdate(HOT) newOffnum mismatch: got slot %d want %d", got, want)
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// applyUpdateOldPage sets xmax and HOT flags on the old tuple during cross-page update.
+func (s *WalPageStore) applyUpdateOldPage(
+	loc wal.RelFileLocator, fork wal.ForkNum,
+	xid uint32,
+	oldBlock, newBlock uint32, oldOffnum, newOffnum uint16,
+	recLSN wal.LSN,
+) error {
+	id, err := s.getBuffer(loc, fork, oldBlock)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate old ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	if err := s.updateOldTupleHeader(pg, xid, oldOffnum, newBlock, newOffnum, false); err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate old header: %w", err)
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// applyUpdateNewPage inserts the new tuple on the new block.
+func (s *WalPageStore) applyUpdateNewPage(
+	loc wal.RelFileLocator, fork wal.ForkNum,
+	newBlock uint32, newOffnum uint16,
+	newTupleData []byte, initNewPage bool,
+	recLSN wal.LSN,
+) error {
+	id, err := s.getBuffer(loc, fork, newBlock)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate new ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	if initNewPage {
+		pg.init()
+	}
+	got, err := pg.InsertTuple(newTupleData)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyUpdate new InsertTuple: %w", err)
+	}
+	if want := int(newOffnum) - 1; got != want {
+		return fmt.Errorf("wal_apply: ApplyUpdate new offnum mismatch: got slot %d want %d", got, want)
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// updateOldTupleHeader sets xmax, clears HeapXmaxInvalid, sets HeapUpdated,
+// optionally sets HeapHotUpdated, and sets t_ctid on the old tuple in-place.
+func (s *WalPageStore) updateOldTupleHeader(
+	pg *Page, xid uint32, oldOffnum uint16,
+	newBlock uint32, newOffnum uint16, isHot bool,
+) error {
+	lp, err := pg.GetItemId(int(oldOffnum) - 1)
+	if err != nil {
+		return err
+	}
+	if !lp.IsNormal() {
+		return fmt.Errorf("old slot %d is not LP_NORMAL (flags=%d)", oldOffnum, lp.Flags())
+	}
+	off := int(lp.Off())
+	if off+HeapTupleHeaderSize > PageSize {
+		return fmt.Errorf("old tuple header out of bounds at offset %d", off)
+	}
+
+	hdr := decodeHeapTupleHeader(pg.data[off:])
+	hdr.TXmax = xid
+	hdr.TInfomask = uint16(
+		(InfomaskFlags(hdr.TInfomask) &^ HeapXmaxInvalid) | HeapUpdated,
+	)
+	if isHot {
+		hdr.TInfomask2 = uint16(Infomask2Flags(hdr.TInfomask2) | HeapHotUpdated)
+	}
+	hdr.TCtidBlock = newBlock
+	hdr.TCtidOffset = newOffnum
+	encodeHeapTupleHeader(pg.data[off:], &hdr)
+	return nil
+}
+
 // ApplyBtreeInsert inserts an index tuple at offnum (1-based) into a B-tree page,
 // maintaining sorted order by shifting existing line pointers to the right.
 func (s *WalPageStore) ApplyBtreeInsert(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, offnum uint16, tupleData []byte, initPage, isLeaf bool, recLSN wal.LSN) error {

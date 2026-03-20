@@ -434,6 +434,25 @@ func (p *Page) MarkDead(i int) error {
 	return nil
 }
 
+// UpdateTupleHeader overwrites the HeapTupleHeader of the LP_NORMAL tuple at
+// 0-based index i without touching the variable-length data portion.
+// Used by the heap UPDATE path to set xmax, infomask flags, and t_ctid.
+func (p *Page) UpdateTupleHeader(i int, hdr *HeapTupleHeader) error {
+	lp, err := p.GetItemId(i)
+	if err != nil {
+		return err
+	}
+	if !lp.IsNormal() {
+		return errInvalidItemIndex(i)
+	}
+	off := int(lp.Off())
+	if off+HeapTupleHeaderSize > PageSize {
+		return errInvalidPageLayout("tuple header out of bounds")
+	}
+	encodeHeapTupleHeader(p.data[off:], hdr)
+	return nil
+}
+
 // SetItemIdRedirect rewrites the line pointer at 0-based index i as an
 // LP_REDIRECT pointing at targetOffset (1-based OffsetNumber of the chain
 // head on the same page).  Used to simulate HOT chain pruning in tests.

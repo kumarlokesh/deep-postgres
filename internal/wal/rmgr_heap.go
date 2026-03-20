@@ -49,6 +49,42 @@ func decodeXLHeapInsert(data []byte) (xlHeapInsertData, error) {
 	}, nil
 }
 
+// ── xl_heap_update ─────────────────────────────────────────────────────────────
+
+// xlHeapUpdateIsHot indicates a HOT update: old and new tuples share one page.
+const xlHeapUpdateIsHot uint8 = 0x01
+
+// xlHeapUpdateInitPage indicates the new page must be initialised before insert.
+const xlHeapUpdateInitPage uint8 = 0x02
+
+// xlHeapUpdateData mirrors the fixed portion of PostgreSQL's xl_heap_update:
+//
+//	uint16  old_offnum
+//	uint8   old_infobits_set
+//	uint8   flags           (0x01=HOT, 0x02=init new page)
+//	uint16  new_offnum
+//	uint16  _pad
+const xlHeapUpdateSize = 8
+
+type xlHeapUpdateData struct {
+	OldOffnum   uint16
+	OldInfobits uint8
+	Flags       uint8
+	NewOffnum   uint16
+}
+
+func decodeXLHeapUpdate(data []byte) (xlHeapUpdateData, error) {
+	if len(data) < xlHeapUpdateSize {
+		return xlHeapUpdateData{}, fmt.Errorf("heap: xl_heap_update too short (%d bytes)", len(data))
+	}
+	return xlHeapUpdateData{
+		OldOffnum:   binary.LittleEndian.Uint16(data[0:]),
+		OldInfobits: data[2],
+		Flags:       data[3],
+		NewOffnum:   binary.LittleEndian.Uint16(data[4:]),
+	}, nil
+}
+
 // ── xl_heap_delete ─────────────────────────────────────────────────────────────
 
 // xlHeapDeleteData mirrors PostgreSQL's xl_heap_delete (heapam_xlog.h):
@@ -88,8 +124,7 @@ func heapRedo(ctx RedoContext) error {
 	case xlHeapDelete:
 		return heapRedoDelete(ctx)
 	case xlHeapUpdate, xlHeapHotUpdate:
-		// Update redo is not yet implemented; silently skip.
-		return nil
+		return heapRedoUpdate(ctx)
 	default:
 		return nil
 	}
@@ -174,6 +209,60 @@ func heapRedoDelete(ctx RedoContext) error {
 	return ctx.Store.ApplyDelete(
 		br.Reln, br.ForkNum, br.BlockNum,
 		xlrec.TargetOffnum, ctx.LSN,
+	)
+}
+
+// ── heapRedoUpdate ────────────────────────────────────────────────────────────
+
+func heapRedoUpdate(ctx RedoContext) error {
+	rec := ctx.Rec
+	if len(rec.BlockRefs) == 0 {
+		return fmt.Errorf("heap update: no block references")
+	}
+	// BlockRef[0] = new block (carries new tuple data).
+	newBR := rec.BlockRefs[0]
+
+	// Full-page write on the new block.
+	if newBR.Image != nil && newBR.Image.BimgInfo&BimgApply != 0 {
+		if ctx.Store == nil {
+			return nil
+		}
+		return ctx.Store.ApplyFPW(newBR.Reln, newBR.ForkNum, newBR.BlockNum, newBR.Image, ctx.LSN)
+	}
+
+	xlrec, err := decodeXLHeapUpdate(rec.MainData)
+	if err != nil {
+		return err
+	}
+
+	isHot := xlrec.Flags&xlHeapUpdateIsHot != 0
+	initNewPage := xlrec.Flags&xlHeapUpdateInitPage != 0
+
+	// For HOT: old block == new block.  For cross-page: old block is BlockRef[1].
+	oldBlock := newBR.BlockNum
+	if !isHot && len(rec.BlockRefs) > 1 {
+		oldBlock = rec.BlockRefs[1].BlockNum
+	}
+
+	// Logical decoding: emit the new-image tuple.
+	if ctx.Logical != nil {
+		ctx.Logical.OnUpdate(
+			rec.Header.XlXid, ctx.LSN,
+			newBR.Reln, newBR.BlockNum, xlrec.NewOffnum, newBR.Data,
+		)
+	}
+
+	if ctx.Store == nil {
+		return nil
+	}
+	return ctx.Store.ApplyUpdate(
+		newBR.Reln, newBR.ForkNum,
+		rec.Header.XlXid,
+		oldBlock, newBR.BlockNum,
+		xlrec.OldOffnum, xlrec.NewOffnum,
+		newBR.Data,
+		isHot, initNewPage,
+		ctx.LSN,
 	)
 }
 

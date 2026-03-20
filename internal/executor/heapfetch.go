@@ -2,14 +2,17 @@ package executor
 
 // HeapFetch — fetch the MVCC-visible version of a tuple at a specific heap TID.
 //
-// The TID supplied by an index entry may point to an LP_REDIRECT slot created
-// by HOT chain compaction.  HeapFetch follows that single redirect hop to the
-// LP_NORMAL chain head before checking visibility.
+// The algorithm mirrors PostgreSQL's heap_hot_search_buffer() in heapam.c:
 //
-// HOT chain note: after reaching the chain head we do not walk the t_ctid
-// forward pointer here because we have not yet implemented heap UPDATE.  When
-// UPDATE is added, heap_hot_search_buffer logic (walk t_ctid until flags say
-// HEAP_ONLY_TUPLE) can be layered in at that point.
+//  1. Follow one LP_REDIRECT hop (left by HOT chain pruning) to reach the
+//     LP_NORMAL chain head.
+//  2. Walk the t_ctid forward pointer chain while the current tuple is not
+//     visible to the snapshot but has HEAP_HOT_UPDATED set.  Each hop stays
+//     on the same page (HOT chains are always intra-page until VACUUM removes
+//     them via LP_REDIRECT).
+//  3. Return the first visible version found, or nil if none is visible.
+//
+// Buffer discipline: one page is pinned for the duration of the call.
 
 import (
 	"fmt"
@@ -18,8 +21,9 @@ import (
 )
 
 // HeapFetch loads the block at (block, offset), follows any LP_REDIRECT to
-// the HOT chain head, applies MVCC visibility, and returns the tuple if
-// visible.  Returns nil, nil if the tuple is not visible to snap.
+// the HOT chain head, walks the t_ctid chain for HOT-updated tuples, and
+// returns the first MVCC-visible version.  Returns nil, nil if nothing is
+// visible.
 func HeapFetch(
 	rel *storage.Relation,
 	snap *storage.Snapshot,
@@ -44,9 +48,9 @@ func HeapFetch(
 		return nil, fmt.Errorf("heapfetch: GetItemId(%d): %w", offset-1, err)
 	}
 
-	// Follow one LP_REDIRECT hop to the HOT chain head (same page, different slot).
+	// Follow one LP_REDIRECT hop to the HOT chain head (same page).
+	// lp.Off() for an LP_REDIRECT is the 1-based OffsetNumber of the target.
 	if lp.IsRedirect() {
-		// lp.Off() is the 1-based OffsetNumber of the chain head on this page.
 		chainOffset := lp.Off()
 		lp, err = page.GetItemId(int(chainOffset) - 1)
 		if err != nil {
@@ -65,13 +69,39 @@ func HeapFetch(
 		return nil, fmt.Errorf("heapfetch: decode: %w", err)
 	}
 
-	vis := storage.HeapTupleSatisfiesMVCC(&tup.Header, snap, oracle)
-	if !vis.IsVisible() {
-		return nil, nil
-	}
-	storage.SetHintBits(&tup.Header, oracle)
+	// Walk the HOT chain: if the current version is not visible but has
+	// HEAP_HOT_UPDATED, follow t_ctid to the next version on this page.
+	for {
+		vis := storage.HeapTupleSatisfiesMVCC(&tup.Header, snap, oracle)
+		if vis.IsVisible() {
+			storage.SetHintBits(&tup.Header, oracle)
+			return &ScanTuple{Tuple: tup, Block: block, Offset: offset}, nil
+		}
 
-	return &ScanTuple{Tuple: tup, Block: block, Offset: offset}, nil
+		// Stop if there is no HOT successor on this page.
+		if !tup.Header.IsHotUpdated() {
+			break
+		}
+
+		nextBlock, nextOffset := tup.Header.Ctid()
+		// HOT chains are intra-page; if t_ctid left the page, stop.
+		if nextBlock != block {
+			break
+		}
+
+		nextLp, lerr := page.GetItemId(int(nextOffset) - 1)
+		if lerr != nil || !nextLp.IsNormal() {
+			break
+		}
+		nextTup, terr := decodeLPTuple(page, nextLp)
+		if terr != nil {
+			break
+		}
+		tup = nextTup
+		offset = nextOffset
+	}
+
+	return nil, nil
 }
 
 // decodeLPTuple reads the tuple bytes pointed to by an LP_NORMAL line pointer.
