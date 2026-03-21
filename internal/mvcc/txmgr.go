@@ -124,3 +124,20 @@ func (m *TransactionManager) NextXid() storage.TransactionId { return m.nextXid 
 
 // ActiveCount returns the number of in-progress transactions.
 func (m *TransactionManager) ActiveCount() int { return len(m.active) }
+
+// GlobalXmin returns the oldest XID still active across all in-progress
+// transactions.  If no transactions are active, it returns nextXid (every
+// committed XID is a dead-tuple candidate).
+//
+// This mirrors PostgreSQL's GetOldestXmin / ComputeXidHorizons in procarray.c.
+// VACUUM uses it as the reclaim threshold: tuples whose xmax is committed and
+// < GlobalXmin are dead to every possible snapshot.
+func (m *TransactionManager) GlobalXmin() storage.TransactionId {
+	xmin := m.nextXid
+	for xid := range m.active {
+		if xid < xmin {
+			xmin = xid
+		}
+	}
+	return xmin
+}

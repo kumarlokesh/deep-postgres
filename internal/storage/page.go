@@ -424,6 +424,17 @@ func (p *Page) GetTuple(i int) ([]byte, error) {
 	return result, nil
 }
 
+// SetItemIdUnused reclaims the line pointer at 0-based index i by zeroing it
+// (ItemIdData = 0 has LpUnused flags).  Used by VACUUM after confirming that
+// no index entry points to this slot.
+func (p *Page) SetItemIdUnused(i int) error {
+	if i < 0 || i >= p.ItemCount() {
+		return errInvalidItemIndex(i)
+	}
+	encodeItemId(p.data[itemIdOffset(i):], ItemIdData(0))
+	return nil
+}
+
 // MarkDead transitions the line pointer at index i to LpDead.
 func (p *Page) MarkDead(i int) error {
 	if i < 0 || i >= p.ItemCount() {
