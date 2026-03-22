@@ -20,8 +20,7 @@ package executor
 //  • Index vacuum (removing index entries for dead heap TIDs) is skipped;
 //    dead tuples go directly to LP_UNUSED instead of LP_DEAD.
 //  • Page compaction (moving pd_lower/pd_upper to reclaim tuple data space).
-//  • Visibility map updates.
-//  • FSM (free space map) updates.
+//    Freed slot data space is not reclaimed until a VACUUM FULL / page rewrite.
 
 import (
 	"fmt"
@@ -37,11 +36,14 @@ const DefaultFreezeMinAge storage.TransactionId = 50
 
 // VacuumStats accumulates statistics across the full relation vacuum.
 type VacuumStats struct {
-	PagesScanned  int
-	PagesModified int
-	TuplesRemoved int
-	TuplesFrozen  int
-	HOTPruned     int
+	PagesScanned    int
+	PagesModified   int
+	PagesAllVisible int // pages marked all-visible in the VM after this vacuum pass
+	TuplesRemoved   int
+	TuplesFrozen    int
+	HOTPruned       int
+	// FSMUpdated is the number of pages whose free-space entry was refreshed.
+	FSMUpdated int
 }
 
 // VacuumConfig holds tunable parameters.
@@ -94,6 +96,7 @@ func Vacuum(rel *storage.Relation, txmgr *mvcc.TransactionManager, cfg VacuumCon
 		}
 
 		pageStats, modified := storage.VacuumPage(pg, opts, txmgr)
+		freeNow := uint16(pg.FreeSpace()) // read before unpin
 
 		rel.Pool.UnpinBuffer(id) //nolint:errcheck
 
@@ -104,6 +107,25 @@ func Vacuum(rel *storage.Relation, txmgr *mvcc.TransactionManager, cfg VacuumCon
 		stats.TuplesRemoved += pageStats.TuplesRemoved
 		stats.TuplesFrozen += pageStats.TuplesFrozen
 		stats.HOTPruned += pageStats.HOTPruned
+
+		// Update FSM with the page's current free space so that future
+		// HeapInserts can find this page without scanning to the end.
+		if rel.FSM != nil {
+			rel.FSM.Update(blk, freeNow)
+			stats.FSMUpdated++
+		}
+
+		// Update the visibility map.  A page that passed the all-visible check
+		// gets its bit set; a modified page that still has live tuples may no
+		// longer be all-visible, so clear it first to ensure consistency.
+		if rel.VM != nil {
+			if pageStats.AllVisible {
+				rel.VM.SetAllVisible(blk)
+				stats.PagesAllVisible++
+			} else {
+				rel.VM.ClearAllVisible(blk)
+			}
+		}
 	}
 
 	return stats, nil

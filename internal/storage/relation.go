@@ -23,6 +23,8 @@ package storage
 type Relation struct {
 	Node RelFileNode
 	Pool *BufferPool
+	VM   *VisibilityMap // all-visible bits; nil means VM is disabled
+	FSM  *FreeSpaceMap  // free-space estimates per block; nil means disabled
 	smgr StorageManager
 }
 
@@ -30,7 +32,13 @@ type Relation struct {
 // so that cache misses are served from disk.  It does not create any files;
 // call Init or Extend to do that.
 func OpenRelation(node RelFileNode, pool *BufferPool, smgr StorageManager) *Relation {
-	rel := &Relation{Node: node, Pool: pool, smgr: smgr}
+	rel := &Relation{
+		Node: node,
+		Pool: pool,
+		VM:   NewVisibilityMap(0),
+		FSM:  NewFreeSpaceMap(0),
+		smgr: smgr,
+	}
 	pool.RegisterRelation(node.RelId, node, smgr)
 	return rel
 }
