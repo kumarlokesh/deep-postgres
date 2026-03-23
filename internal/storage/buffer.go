@@ -94,42 +94,73 @@ type BufferPoolStats struct {
 	Pinned int
 }
 
+// BufferTracer receives events from the buffer pool.
+// Implement this interface to collect hit/miss/eviction metrics.
+// The NoopBufferTracer provides a zero-cost default.
+type BufferTracer interface {
+	OnHit(tag BufferTag)
+	OnMiss(tag BufferTag)
+	OnEvict(tag BufferTag, dirty bool)
+}
+
+// NoopBufferTracer discards all events.
+type NoopBufferTracer struct{}
+
+func (NoopBufferTracer) OnHit(BufferTag)         {}
+func (NoopBufferTracer) OnMiss(BufferTag)        {}
+func (NoopBufferTracer) OnEvict(BufferTag, bool) {}
+
 // relEntry binds a relation's file location to its storage manager.
 type relEntry struct {
 	node RelFileNode
 	smgr StorageManager
 }
 
-// BufferPool manages a fixed pool of page buffers with clock-sweep eviction.
-// Optionally, relations can be registered with a StorageManager so that cache
-// misses are served from disk and dirty evictions are written back.
+// BufferPool manages a fixed pool of page buffers.  The replacement strategy
+// is pluggable via EvictionPolicy; the default is ClockSweep.  An optional
+// BufferTracer receives hit/miss/eviction events for instrumentation.
 type BufferPool struct {
 	descriptors []BufferDesc
 	pages       []*Page
 	tagMap      map[BufferTag]BufferId
-	clockHand   int
 	numBuffers  int
 	rels        map[Oid]relEntry // relation registry for smgr-backed I/O
+	policy      EvictionPolicy
+	tracer      BufferTracer
 }
 
-// NewBufferPool creates a pool of numBuffers slots.
+// NewBufferPool creates a pool of numBuffers slots using ClockSweep eviction.
 // Panics if numBuffers == 0.
 func NewBufferPool(numBuffers int) *BufferPool {
+	return NewBufferPoolWithPolicy(numBuffers, &ClockSweepPolicy{})
+}
+
+// NewBufferPoolWithPolicy creates a pool using the supplied EvictionPolicy.
+// An optional tracer may be attached via pool.SetTracer after construction.
+// Panics if numBuffers == 0.
+func NewBufferPoolWithPolicy(numBuffers int, policy EvictionPolicy) *BufferPool {
 	if numBuffers <= 0 {
 		panic("buffer pool must have at least one buffer")
 	}
+	policy.Init(numBuffers)
 	pool := &BufferPool{
 		descriptors: make([]BufferDesc, numBuffers),
 		pages:       make([]*Page, numBuffers),
 		tagMap:      make(map[BufferTag]BufferId, numBuffers),
 		numBuffers:  numBuffers,
 		rels:        make(map[Oid]relEntry),
+		policy:      policy,
+		tracer:      NoopBufferTracer{},
 	}
 	for i := range pool.pages {
 		pool.pages[i] = NewPage()
 	}
 	return pool
 }
+
+// SetTracer replaces the pool's BufferTracer.  Pass NoopBufferTracer{} to
+// disable tracing.
+func (p *BufferPool) SetTracer(t BufferTracer) { p.tracer = t }
 
 // NumBuffers returns the total number of buffer slots.
 func (p *BufferPool) NumBuffers() int { return p.numBuffers }
@@ -151,33 +182,62 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 	if id, ok := p.tagMap[tag]; ok {
 		desc := &p.descriptors[id]
 		desc.Pin()
-		desc.UsageCount = maxUsageCount
+		p.policy.Access(id, p.descriptors)
+		p.tracer.OnHit(tag)
 		return id, nil
 	}
 
-	// Allocate a slot.
-	id, err := p.allocateBuffer()
-	if err != nil {
-		return InvalidBufferId, err
+	p.tracer.OnMiss(tag)
+
+	// Choose a victim via the eviction policy.
+	// TagEvictionPolicy gets the incoming tag so ghost-list policies (e.g. ARC)
+	// can make a more informed eviction decision.
+	var id BufferId
+	var ok bool
+	if tep, isTag := p.policy.(TagEvictionPolicy); isTag {
+		id, ok = tep.VictimForTag(tag, p.descriptors)
+	} else {
+		id, ok = p.policy.Victim(p.descriptors)
+	}
+	if !ok {
+		return InvalidBufferId, errBufferExhausted()
 	}
 	desc := &p.descriptors[id]
 
 	// Remove stale tag mapping if the slot was previously occupied.
+	oldTag := desc.Tag
 	if desc.IsValid() {
-		delete(p.tagMap, desc.Tag)
+		delete(p.tagMap, oldTag)
 	}
 
-	// Flush dirty slot: write back to disk if the relation is registered.
+	// Flush dirty slot: write back to disk and notify tracer.
 	if desc.IsDirty() {
-		p.writePage(desc.Tag, p.pages[id])
+		p.tracer.OnEvict(oldTag, true)
+		p.writePage(oldTag, p.pages[id])
 		desc.State &^= BmDirty
+	} else if desc.IsValid() {
+		p.tracer.OnEvict(oldTag, false)
+	}
+
+	// Notify tag-aware policy of the eviction (moves tag to ghost list).
+	if desc.IsValid() {
+		if tep, isTag := p.policy.(TagEvictionPolicy); isTag {
+			tep.OnEvictTag(oldTag)
+		}
 	}
 
 	// Initialise the slot.
 	desc.Tag = tag
 	desc.State = BmValid
-	desc.UsageCount = maxUsageCount
+	desc.UsageCount = 0
 	desc.Pin()
+
+	// Notify tag-aware policy of the new load; plain policies use Access.
+	if tep, isTag := p.policy.(TagEvictionPolicy); isTag {
+		tep.OnLoadTag(id, tag, p.descriptors)
+	} else {
+		p.policy.Access(id, p.descriptors)
+	}
 
 	// Load the page from disk if a storage manager is registered.
 	// On a miss (block does not exist yet), fall back to a fresh empty page.
@@ -208,41 +268,6 @@ func (p *BufferPool) writePage(tag BufferTag, page *Page) {
 	}
 	// Ignore write errors here; a real implementation would handle them.
 	_ = entry.smgr.Write(entry.node, tag.Fork, tag.BlockNum, page.data[:])
-}
-
-// allocateBuffer finds a victim buffer using clock sweep.
-// Returns ErrBufferExhausted if every buffer is pinned.
-//
-// The clock hand advances one slot per iteration. Unpinned buffers with a
-// non-zero usage count have their count decremented and are skipped; they
-// become candidates on subsequent passes. This drains usage counts across
-// up to maxUsageCount full sweeps before a victim emerges — identical to
-// PostgreSQL's StrategyGetBuffer behaviour.
-func (p *BufferPool) allocateBuffer() (BufferId, error) {
-	// O(n) pre-check: reject immediately if every slot is pinned so the
-	// sweep below doesn't spin forever.
-	for i := range p.descriptors {
-		if !p.descriptors[i].IsPinned() {
-			goto sweep
-		}
-	}
-	return InvalidBufferId, errBufferExhausted()
-
-sweep:
-	for {
-		id := p.clockHand
-		p.clockHand = (p.clockHand + 1) % p.numBuffers
-
-		desc := &p.descriptors[id]
-		if desc.IsPinned() {
-			continue
-		}
-		if desc.UsageCount > 0 {
-			desc.UsageCount--
-			continue
-		}
-		return BufferId(id), nil
-	}
 }
 
 // UnpinBuffer decrements the pin count of buffer id.
