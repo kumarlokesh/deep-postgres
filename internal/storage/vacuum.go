@@ -36,9 +36,10 @@ type VacuumOptions struct {
 
 // VacuumPageStats records what VacuumPage did on one page.
 type VacuumPageStats struct {
-	TuplesRemoved int // dead tuples reclaimed (LP_DEAD→LP_UNUSED or LP_NORMAL→LP_UNUSED)
-	TuplesFrozen  int // tuples whose xmin was replaced with FrozenTransactionId
-	HOTPruned     int // LP_NORMAL chain heads converted to LP_REDIRECT
+	TuplesRemoved int  // dead tuples reclaimed (LP_DEAD→LP_UNUSED or LP_NORMAL→LP_UNUSED)
+	TuplesFrozen  int  // tuples whose xmin was replaced with FrozenTransactionId
+	HOTPruned     int  // LP_NORMAL chain heads converted to LP_REDIRECT
+	AllVisible    bool // true if every remaining tuple is visible to all snapshots
 }
 
 // VacuumPage prunes dead tuples and HOT chains on page and optionally freezes
@@ -112,6 +113,11 @@ func VacuumPage(page *Page, opts VacuumOptions, oracle TransactionOracle) (Vacuu
 			}
 		}
 	}
+
+	// After the cleanup pass, check if every remaining tuple is visible to
+	// all current and future snapshots.  If so, the caller can mark the page
+	// in the VisibilityMap and skip per-tuple MVCC checks on future scans.
+	stats.AllVisible = PageIsAllVisible(page, opts.OldestXmin, oracle)
 
 	return stats, modified
 }

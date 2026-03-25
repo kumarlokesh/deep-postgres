@@ -10,12 +10,15 @@ package executor
 //  1. Iterate blocks 0 … nblocks-1 of the relation's main fork.
 //  2. For each block load the page from the buffer pool (one block pinned at a
 //     time; unpinned before moving to the next).
-//  3. Walk the ItemId array (line pointers):
+//  3. If rel.VM marks the block all-visible, skip HeapTupleSatisfiesMVCC and
+//     return all LP_NORMAL tuples directly (they are guaranteed visible to
+//     every snapshot).
+//  4. Walk the ItemId array (line pointers):
 //       LP_UNUSED / LP_DEAD  → skip
 //       LP_REDIRECT          → skip (the chain head is a normal LP on the same
 //                              page; we will visit it in the same pass)
 //       LP_NORMAL            → decode tuple, apply MVCC visibility.
-//  4. Return each visible tuple together with its physical location (block,
+//  5. Return each visible tuple together with its physical location (block,
 //     1-based offset number) so callers can form heap TIDs.
 //
 // HOT chain note: LP_REDIRECT slots are left by page-level HOT chain
@@ -93,6 +96,10 @@ func (s *SeqScan) Next() (*ScanTuple, error) {
 			}
 		}
 
+		// If the VM marks this block all-visible we can skip per-tuple MVCC
+		// checks: every LP_NORMAL tuple is guaranteed visible to all snapshots.
+		allVisible := s.rel.VM.IsAllVisible(s.curBlock)
+
 		// Scan line pointers on the current page.
 		n := s.curPage.ItemCount()
 		for s.curOffset < n {
@@ -119,18 +126,21 @@ func (s *SeqScan) Next() (*ScanTuple, error) {
 				return nil, err
 			}
 
-			result := storage.HeapTupleSatisfiesMVCC(&tup.Header, s.snap, s.oracle)
-			if result.IsVisible() {
+			if !allVisible {
+				result := storage.HeapTupleSatisfiesMVCC(&tup.Header, s.snap, s.oracle)
+				if !result.IsVisible() {
+					continue
+				}
 				// Cache hint bits back into the page so future scans skip
 				// clog lookups.  This write is safe even with read-only
 				// callers: hint bits are idempotent and never change data
 				// semantics.
 				storage.SetHintBits(&tup.Header, s.oracle)
-
-				block := s.curBlock
-				offset := storage.OffsetNumber(idx + 1) // 1-based
-				return &ScanTuple{Tuple: tup, Block: block, Offset: offset}, nil
 			}
+
+			block := s.curBlock
+			offset := storage.OffsetNumber(idx + 1) // 1-based
+			return &ScanTuple{Tuple: tup, Block: block, Offset: offset}, nil
 		}
 
 		// Exhausted this page; release the buffer and move to the next block.

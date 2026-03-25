@@ -83,6 +83,8 @@ func HeapUpdate(
 			}
 
 			rel.Pool.UnpinBuffer(id) //nolint:errcheck
+			// The page was modified: it is no longer all-visible.
+			rel.VM.ClearAllVisible(oldBlock)
 			return oldBlock, actualOffset, nil
 		}
 
@@ -128,6 +130,9 @@ func HeapUpdate(
 		return 0, 0, fmt.Errorf("heapupdate: old header (cross-page): %w", err)
 	}
 	rel.Pool.UnpinBuffer(oldId) //nolint:errcheck
+	// Both the old and new pages were modified.
+	rel.VM.ClearAllVisible(oldBlock)
+	rel.VM.ClearAllVisible(newBlock)
 
 	return newBlock, actualOffset, nil
 }
