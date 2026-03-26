@@ -23,6 +23,7 @@ type TransactionManager struct {
 	clog    *Clog
 	nextXid storage.TransactionId                       // next XID to assign
 	active  map[storage.TransactionId]storage.CommandId // xid → current CID
+	tracer  TxTracer
 }
 
 // NewTransactionManager creates a manager with a fresh CLOG.
@@ -32,8 +33,13 @@ func NewTransactionManager() *TransactionManager {
 		clog:    NewClog(),
 		nextXid: storage.FirstNormalTransactionId,
 		active:  make(map[storage.TransactionId]storage.CommandId),
+		tracer:  NoopTxTracer{},
 	}
 }
+
+// SetTracer replaces the manager's TxTracer.  Pass NoopTxTracer{} to disable.
+// Call before any transactions are started.
+func (m *TransactionManager) SetTracer(t TxTracer) { m.tracer = t }
 
 // Begin starts a new transaction and returns its XID.
 // Panics if XID space is exhausted (wrap-around not implemented here).
@@ -42,6 +48,7 @@ func (m *TransactionManager) Begin() storage.TransactionId {
 	m.nextXid++
 	m.active[xid] = storage.FirstCommandId
 	m.clog.SetStatus(xid, storage.TxInProgress)
+	m.tracer.OnBegin(xid)
 	return xid
 }
 
@@ -64,6 +71,7 @@ func (m *TransactionManager) Commit(xid storage.TransactionId) error {
 	}
 	m.clog.SetStatus(xid, storage.TxCommitted)
 	delete(m.active, xid)
+	m.tracer.OnCommit(xid)
 	return nil
 }
 
@@ -74,6 +82,7 @@ func (m *TransactionManager) Abort(xid storage.TransactionId) error {
 	}
 	m.clog.SetStatus(xid, storage.TxAborted)
 	delete(m.active, xid)
+	m.tracer.OnAbort(xid)
 	return nil
 }
 
@@ -109,13 +118,15 @@ func (m *TransactionManager) Snapshot(txid storage.TransactionId) *storage.Snaps
 		curCid = cid
 	}
 
-	return &storage.Snapshot{
+	snap := &storage.Snapshot{
 		Xid:    txid,
 		Xmin:   xmin,
 		Xmax:   xmax,
 		Xip:    xip,
 		CurCid: curCid,
 	}
+	m.tracer.OnSnapshot(txid, snap)
+	return snap
 }
 
 // NextXid returns the next XID that would be assigned by Begin.
