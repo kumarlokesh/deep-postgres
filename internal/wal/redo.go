@@ -39,6 +39,7 @@ type RedoEngine struct {
 	progress RedoProgress
 	store    PageWriter     // optional; nil = no page application
 	logical  LogicalDecoder // optional; nil = no logical decoding
+	tracer   RedoTracer     // optional; NoopRedoTracer by default
 
 	// stats
 	stats RedoStats
@@ -68,6 +69,7 @@ func NewRedoEngine(
 		endLSN:   endLSN,
 		provider: provider,
 		progress: onProgress,
+		tracer:   NoopRedoTracer{},
 	}
 }
 
@@ -103,6 +105,7 @@ func (e *RedoEngine) Run() error {
 		// Compute the LSN of the first byte of this segment.
 		_, segOffset := XLByteToSeg(currentLSN, WALSegSize)
 		segStartLSN := currentLSN - LSN(segOffset)
+		e.tracer.OnSegment(segStartLSN)
 
 		reader := NewSegmentReader(segData, segStartLSN, e.tli)
 
@@ -135,6 +138,7 @@ func (e *RedoEngine) Run() error {
 			switch {
 			case redoErr == nil:
 				e.stats.RecordsApplied++
+				e.tracer.OnApply(rec.LSN, rec)
 				if e.progress != nil {
 					e.progress(rec)
 				}
@@ -142,6 +146,7 @@ func (e *RedoEngine) Run() error {
 				errors.As(redoErr, new(ErrUnimplementedRedo)):
 				// Non-fatal: skip unknown / unimplemented rmgrs.
 				e.stats.RecordsSkipped++
+				e.tracer.OnSkip(rec.LSN, rec, redoErr)
 			default:
 				return fmt.Errorf("wal: redo at lsn %s: %w", rec.LSN, redoErr)
 			}
@@ -165,6 +170,10 @@ func (e *RedoEngine) SetStore(s PageWriter) { e.store = s }
 
 // SetLogical wires a logical decoder into the engine.  Call before Run.
 func (e *RedoEngine) SetLogical(l LogicalDecoder) { e.logical = l }
+
+// SetTracer replaces the engine's RedoTracer.  Pass NoopRedoTracer{} to
+// disable tracing.  Call before Run.
+func (e *RedoEngine) SetTracer(t RedoTracer) { e.tracer = t }
 
 // Stats returns a copy of the current replay statistics.
 func (e *RedoEngine) Stats() RedoStats { return e.stats }
