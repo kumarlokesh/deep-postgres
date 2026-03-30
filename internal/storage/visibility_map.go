@@ -66,6 +66,22 @@ func (vm *VisibilityMap) ClearAllVisible(blk BlockNumber) {
 	vm.bits[byteIdx] &^= 1 << (blk % 8)
 }
 
+// Reset truncates the VM to cover only nblocks blocks.
+// Called by VACUUM FULL after trailing empty pages are removed from the file.
+func (vm *VisibilityMap) Reset(nblocks BlockNumber) {
+	if vm == nil {
+		return
+	}
+	need := int((nblocks + 7) / 8)
+	if need < len(vm.bits) {
+		// Zero the partial byte at the boundary, then trim.
+		if nblocks%8 != 0 {
+			vm.bits[need-1] &= (1 << (nblocks % 8)) - 1
+		}
+		vm.bits = vm.bits[:need]
+	}
+}
+
 // grow ensures the bit array covers at least nblocks blocks.
 func (vm *VisibilityMap) grow(nblocks BlockNumber) {
 	need := int((nblocks + 7) / 8)

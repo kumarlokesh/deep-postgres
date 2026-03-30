@@ -341,6 +341,36 @@ func (p *BufferPool) FlushAll() {
 	}
 }
 
+// InvalidateRange removes all pool entries for blocks [from, ∞) of relId/fork.
+// The buffer must not be pinned; pinned buffers are skipped.
+// Dirty buffers in the range are flushed to disk before invalidation.
+//
+// Use this before truncating a relation so the pool does not return stale pages
+// for blocks that no longer exist on disk.
+func (p *BufferPool) InvalidateRange(relId Oid, fork ForkNumber, from BlockNumber) {
+	for i := range p.descriptors {
+		desc := &p.descriptors[i]
+		if !desc.IsValid() {
+			continue
+		}
+		tag := desc.Tag
+		if tag.RelationId != relId || tag.Fork != fork || tag.BlockNum < from {
+			continue
+		}
+		if desc.IsPinned() {
+			continue // cannot invalidate a pinned buffer
+		}
+		if desc.IsDirty() {
+			p.writePage(tag, p.pages[i])
+			desc.State &^= BmDirty
+		}
+		delete(p.tagMap, tag)
+		desc.State &^= BmValid
+		desc.Tag = BufferTag{}
+		desc.UsageCount = 0
+	}
+}
+
 // Stats returns a snapshot of buffer pool utilisation.
 func (p *BufferPool) Stats() BufferPoolStats {
 	s := BufferPoolStats{Total: p.numBuffers}

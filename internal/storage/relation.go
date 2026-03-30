@@ -103,6 +103,13 @@ func (r *Relation) Flush(fork ForkNumber) error {
 	return r.smgr.Sync(r.Node, fork)
 }
 
+// Truncate reduces fork to nBlocks blocks on disk.
+// The caller is responsible for flushing dirty buffers and invalidating pool
+// entries for the removed blocks before calling Truncate.
+func (r *Relation) Truncate(fork ForkNumber, nBlocks BlockNumber) error {
+	return r.smgr.Truncate(r.Node, fork, nBlocks)
+}
+
 // Drop unlinks all fork files for this relation.
 func (r *Relation) Drop() error {
 	return r.smgr.Unlink(r.Node)

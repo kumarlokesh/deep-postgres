@@ -81,6 +81,14 @@ func (fsm *FreeSpaceMap) Grow(nblocks BlockNumber) {
 	fsm.grow(nblocks)
 }
 
+// Reset truncates the FSM to cover only nblocks entries.
+// Called by VACUUM FULL after trailing empty pages are removed from the file.
+func (fsm *FreeSpaceMap) Reset(nblocks BlockNumber) {
+	if int(nblocks) < len(fsm.avail) {
+		fsm.avail = fsm.avail[:nblocks]
+	}
+}
+
 func (fsm *FreeSpaceMap) grow(nblocks BlockNumber) {
 	need := int(nblocks)
 	if need > len(fsm.avail) {
