@@ -1,4 +1,3 @@
-# deep-postgres Makefile
 # Targets: build, test, bench, lint, cover, docker-*, clean
 
 BINARY    := deep-postgres
