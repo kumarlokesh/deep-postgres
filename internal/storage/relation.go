@@ -21,11 +21,12 @@ package storage
 
 // Relation wraps a RelFileNode with a buffer pool and storage manager.
 type Relation struct {
-	Node RelFileNode
-	Pool *BufferPool
-	VM   *VisibilityMap // all-visible bits; nil means VM is disabled
-	FSM  *FreeSpaceMap  // free-space estimates per block; nil means disabled
-	smgr StorageManager
+	Node  RelFileNode
+	Pool  *BufferPool
+	VM    *VisibilityMap      // all-visible bits; nil means VM is disabled
+	FSM   *FreeSpaceMap       // free-space estimates per block; nil means disabled
+	Toast *InMemoryToastStore // out-of-line TOAST store; nil means TOAST disabled
+	smgr  StorageManager
 }
 
 // OpenRelation creates a Relation handle and registers it with the buffer pool
@@ -33,11 +34,12 @@ type Relation struct {
 // call Init or Extend to do that.
 func OpenRelation(node RelFileNode, pool *BufferPool, smgr StorageManager) *Relation {
 	rel := &Relation{
-		Node: node,
-		Pool: pool,
-		VM:   NewVisibilityMap(0),
-		FSM:  NewFreeSpaceMap(0),
-		smgr: smgr,
+		Node:  node,
+		Pool:  pool,
+		VM:    NewVisibilityMap(0),
+		FSM:   NewFreeSpaceMap(0),
+		Toast: NewInMemoryToastStore(),
+		smgr:  smgr,
 	}
 	pool.RegisterRelation(node.RelId, node, smgr)
 	return rel

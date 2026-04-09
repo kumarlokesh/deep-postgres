@@ -26,6 +26,14 @@ func HeapInsert(
 	rel *storage.Relation,
 	tup *storage.HeapTuple,
 ) (storage.BlockNumber, storage.OffsetNumber, error) {
+	// TOAST: if the payload exceeds the threshold and the relation has a TOAST
+	// store, move the data out-of-line before computing the needed page space.
+	if rel.Toast != nil {
+		if err := storage.Toastify(tup, rel.Toast); err != nil {
+			return 0, 0, fmt.Errorf("heapinsert: toastify: %w", err)
+		}
+	}
+
 	needed := uint16(tup.Len()) + storage.ItemIdSize
 
 	// ── Try FSM ───────────────────────────────────────────────────────────────
