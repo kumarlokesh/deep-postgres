@@ -219,6 +219,113 @@ func TestPageValidationRejectsCorruption(t *testing.T) {
 	}
 }
 
+// TestBidirectionalLayout pins the exact physical byte offsets that the
+// bidirectional page layout must maintain:
+//
+//	0       24       28       32  ...  8180     8188     8192
+//	|hdr(24)| LP[0](4)| LP[1](4)|free | B(8)    | A(4)    |
+//
+// Line pointers grow upward from pd_lower (offset 24); tuple data grows
+// downward from pd_special (offset 8192 for heap pages). They advance toward
+// each other and the gap between them is the usable free space.
+func TestBidirectionalLayout(t *testing.T) {
+	p := NewPage()
+	const (
+		dataA = "AAAA"     // 4 bytes
+		dataB = "BBBBBBBB" // 8 bytes
+	)
+
+	// ── After first insert ────────────────────────────────────────────────────
+	idxA, err := p.InsertTuple([]byte(dataA))
+	if err != nil {
+		t.Fatalf("InsertTuple A: %v", err)
+	}
+	hA := p.Header()
+
+	// pd_lower must have advanced by exactly one ItemIdSize.
+	wantLowerA := PageHeaderSize + ItemIdSize // 24 + 4 = 28
+	if int(hA.PdLower) != wantLowerA {
+		t.Errorf("after A: pd_lower=%d, want %d", hA.PdLower, wantLowerA)
+	}
+	// pd_upper must have retreated by exactly len(dataA).
+	wantUpperA := PageSize - len(dataA) // 8192 - 4 = 8188
+	if int(hA.PdUpper) != wantUpperA {
+		t.Errorf("after A: pd_upper=%d, want %d", hA.PdUpper, wantUpperA)
+	}
+
+	// The line pointer for A must point to the byte just after the new pd_upper.
+	lpA, _ := p.GetItemId(idxA)
+	if int(lpA.Off()) != wantUpperA {
+		t.Errorf("LP[A].Off=%d, want %d (= pd_upper after A)", lpA.Off(), wantUpperA)
+	}
+	if int(lpA.Len()) != len(dataA) {
+		t.Errorf("LP[A].Len=%d, want %d", lpA.Len(), len(dataA))
+	}
+
+	// Tuple A bytes must live at [pd_upper, pd_upper+len(A)) - the top of the page.
+	raw := p.Bytes()
+	if string(raw[wantUpperA:wantUpperA+len(dataA)]) != dataA {
+		t.Errorf("raw bytes at pd_upper: got %q, want %q",
+			raw[wantUpperA:wantUpperA+len(dataA)], dataA)
+	}
+
+	// ── After second insert ───────────────────────────────────────────────────
+	idxB, err := p.InsertTuple([]byte(dataB))
+	if err != nil {
+		t.Fatalf("InsertTuple B: %v", err)
+	}
+	hB := p.Header()
+
+	wantLowerB := wantLowerA + ItemIdSize // 28 + 4 = 32
+	if int(hB.PdLower) != wantLowerB {
+		t.Errorf("after B: pd_lower=%d, want %d", hB.PdLower, wantLowerB)
+	}
+	wantUpperB := wantUpperA - len(dataB) // 8188 - 8 = 8180
+	if int(hB.PdUpper) != wantUpperB {
+		t.Errorf("after B: pd_upper=%d, want %d", hB.PdUpper, wantUpperB)
+	}
+
+	lpB, _ := p.GetItemId(idxB)
+	if int(lpB.Off()) != wantUpperB {
+		t.Errorf("LP[B].Off=%d, want %d", lpB.Off(), wantUpperB)
+	}
+	if int(lpB.Len()) != len(dataB) {
+		t.Errorf("LP[B].Len=%d, want %d", lpB.Len(), len(dataB))
+	}
+
+	if string(raw[wantUpperB:wantUpperB+len(dataB)]) != dataB {
+		t.Errorf("raw bytes at B's offset: got %q, want %q",
+			raw[wantUpperB:wantUpperB+len(dataB)], dataB)
+	}
+
+	// ── Free space is the gap between pd_lower and pd_upper ──────────────────
+	wantFree := wantUpperB - wantLowerB // 8180 - 32 = 8148
+	if p.FreeSpace() != wantFree {
+		t.Errorf("FreeSpace=%d, want %d", p.FreeSpace(), wantFree)
+	}
+
+	// ── Line pointer array occupies [PageHeaderSize, pd_lower) ───────────────
+	// Bytes between pd_lower and pd_upper must be the free gap (all zero on
+	// a fresh page, untouched by either insert).
+	for i := wantLowerB; i < wantUpperB; i++ {
+		if raw[i] != 0 {
+			t.Errorf("free gap byte %d = 0x%02x, want 0x00 (gap is not clean)", i, raw[i])
+			break
+		}
+	}
+
+	// ── Tuple data is inaccessible without going through GetTuple ─────────────
+	// Both tuples must still round-trip through the index → pointer → bytes path.
+	gotA, _ := p.GetTuple(idxA)
+	gotB, _ := p.GetTuple(idxB)
+	if string(gotA) != dataA {
+		t.Errorf("GetTuple(A)=%q, want %q", gotA, dataA)
+	}
+	if string(gotB) != dataB {
+		t.Errorf("GetTuple(B)=%q, want %q", gotB, dataB)
+	}
+}
+
 func TestPageFromBytes(t *testing.T) {
 	p := NewPage()
 	_, err := p.InsertTuple([]byte("round-trip"))
