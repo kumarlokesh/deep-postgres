@@ -326,6 +326,69 @@ func TestBidirectionalLayout(t *testing.T) {
 	}
 }
 
+func TestPageFlagsSetClearHas(t *testing.T) {
+	p := NewPage()
+	if p.HasFlag(PDAllVisible) {
+		t.Error("new page should not have PDAllVisible set")
+	}
+	p.SetFlag(PDAllVisible)
+	if !p.HasFlag(PDAllVisible) {
+		t.Error("SetFlag(PDAllVisible): flag not set")
+	}
+	p.ClearFlag(PDAllVisible)
+	if p.HasFlag(PDAllVisible) {
+		t.Error("ClearFlag(PDAllVisible): flag still set")
+	}
+}
+
+func TestInsertTupleClearsAllVisible(t *testing.T) {
+	p := NewPage()
+	p.SetFlag(PDAllVisible)
+	_, err := p.InsertTuple([]byte("hello"))
+	if err != nil {
+		t.Fatalf("InsertTuple: %v", err)
+	}
+	if p.HasFlag(PDAllVisible) {
+		t.Error("InsertTuple should clear PDAllVisible")
+	}
+}
+
+func TestSetItemIdUnusedSetsFreeLines(t *testing.T) {
+	p := NewPage()
+	_, err := p.InsertTuple([]byte("x"))
+	if err != nil {
+		t.Fatalf("InsertTuple: %v", err)
+	}
+	if p.HasFlag(PDHasFreeLines) {
+		t.Error("no free line pointers yet; flag should be clear")
+	}
+	if err := p.SetItemIdUnused(0); err != nil {
+		t.Fatalf("SetItemIdUnused: %v", err)
+	}
+	if !p.HasFlag(PDHasFreeLines) {
+		t.Error("SetItemIdUnused should set PDHasFreeLines")
+	}
+}
+
+func TestPruneXidRoundTrip(t *testing.T) {
+	p := NewPage()
+	if p.PruneXid() != 0 {
+		t.Errorf("fresh page PruneXid=%d, want 0", p.PruneXid())
+	}
+	p.SetPruneXid(42)
+	if got := p.PruneXid(); got != 42 {
+		t.Errorf("PruneXid=%d, want 42", got)
+	}
+	// Verify it survives a raw byte round-trip.
+	p2, err := PageFromBytes(p.Bytes())
+	if err != nil {
+		t.Fatalf("PageFromBytes: %v", err)
+	}
+	if got := p2.PruneXid(); got != 42 {
+		t.Errorf("after round-trip PruneXid=%d, want 42", got)
+	}
+}
+
 func TestPageFromBytes(t *testing.T) {
 	p := NewPage()
 	_, err := p.InsertTuple([]byte("round-trip"))

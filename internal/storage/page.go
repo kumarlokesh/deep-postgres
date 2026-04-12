@@ -69,6 +69,16 @@ const (
 	PDAllVisible   PageFlags = 0x0004 // all tuples visible to everyone
 )
 
+// pd_lsn stamping note: In PostgreSQL, PageSetLSN is called inside the WAL
+// critical section for every WAL-logged page modification so the LSN reflects
+// the latest WAL record that changed this page. In this research engine,
+// WAL records are generated externally; callers must call SetLSN explicitly
+// after each WAL record is produced. Page mutation methods (InsertTuple,
+// MarkDead, etc.) do NOT auto-stamp the LSN.
+//
+// pd_checksum: field is present in PageHeaderData and serialised as zero.
+// Full checksum computation (FNV-based, per-block) is deferred.
+
 // MakePagesizeVersion packs page size and layout version into pd_pagesize_version.
 // Layout: high byte = page_size / 256, low byte = version.
 func MakePagesizeVersion(pageSize int, version uint8) uint16 {
@@ -304,6 +314,44 @@ func (p *Page) SetLSN(lsn uint64) {
 	p.setHeader(h)
 }
 
+// SetFlag sets the given flag bits in pd_flags.
+func (p *Page) SetFlag(f PageFlags) {
+	h := p.Header()
+	h.PdFlags |= uint16(f)
+	p.setHeader(h)
+}
+
+// ClearFlag clears the given flag bits in pd_flags.
+func (p *Page) ClearFlag(f PageFlags) {
+	h := p.Header()
+	h.PdFlags &^= uint16(f)
+	p.setHeader(h)
+}
+
+// HasFlag reports whether all bits in f are set in pd_flags.
+func (p *Page) HasFlag(f PageFlags) bool {
+	return PageFlags(p.Header().PdFlags)&f == f
+}
+
+// PruneXid returns pd_prune_xid - the oldest non-frozen xmax on the page.
+// Zero means no deletions have been recorded yet.
+//
+// TODO: VacuumPage should call SetPruneXid with the oldest dead xmax it
+// observes so that a future VACUUM pass can skip pages where
+// PruneXid() > OldestXmin (no dead tuples can have become reclaimable).
+func (p *Page) PruneXid() TransactionId {
+	return p.Header().PdPruneXid
+}
+
+// SetPruneXid updates pd_prune_xid to xid.
+// VacuumPage should call this with the oldest non-frozen xmax found on
+// the page so successive VACUUM passes can skip pages that haven't aged.
+func (p *Page) SetPruneXid(xid TransactionId) {
+	h := p.Header()
+	h.PdPruneXid = xid
+	p.setHeader(h)
+}
+
 // itemIdOffset returns the byte offset within p.data[] for line pointer i (0-based).
 func itemIdOffset(i int) int {
 	return PageHeaderSize + i*ItemIdSize
@@ -356,6 +404,7 @@ func (p *Page) InsertTuple(tupleData []byte) (int, error) {
 	// Update header.
 	h.PdUpper = LocationIndex(newUpper)
 	h.PdLower += LocationIndex(ItemIdSize)
+	h.PdFlags &^= uint16(PDAllVisible) // newly inserted tuple is not yet visible to everyone
 	p.setHeader(h)
 
 	return itemIndex, nil
@@ -400,6 +449,7 @@ func (p *Page) InsertTupleAt(pos int, tupleData []byte) error {
 
 	h.PdUpper = LocationIndex(newUpper)
 	h.PdLower += LocationIndex(ItemIdSize)
+	h.PdFlags &^= uint16(PDAllVisible) // newly inserted tuple is not yet visible to everyone
 	p.setHeader(h)
 	return nil
 }
@@ -432,6 +482,9 @@ func (p *Page) SetItemIdUnused(i int) error {
 		return errInvalidItemIndex(i)
 	}
 	encodeItemId(p.data[itemIdOffset(i):], ItemIdData(0))
+	h := p.Header()
+	h.PdFlags |= uint16(PDHasFreeLines) // a reusable LP_UNUSED slot is now available
+	p.setHeader(h)
 	return nil
 }
 
