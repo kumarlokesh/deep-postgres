@@ -4,7 +4,7 @@ package storage
 //
 // Scenarios for ClockSweep:
 //   - Victim skips pinned buffers.
-//   - Access sets UsageCount to maxUsageCount; Victim drains it.
+//   - Access increments UsageCount by 1 up to maxUsageCount; Victim drains it.
 //   - Victim rotates through the ring.
 //
 // Scenarios for LRU:
@@ -90,14 +90,25 @@ func TestClockSweepAllPinned(t *testing.T) {
 	}
 }
 
-func TestClockSweepAccessSetsUsageCount(t *testing.T) {
+func TestClockSweepAccessIncrementsUsageCount(t *testing.T) {
 	cs := &ClockSweepPolicy{}
 	cs.Init(2)
 	descs := makeDescs(2)
 
+	// Each access increments by 1.
+	for want := uint8(1); want <= maxUsageCount; want++ {
+		cs.Access(0, descs)
+		if descs[0].UsageCount != want {
+			t.Errorf("after %d Access calls: UsageCount=%d want %d",
+				want, descs[0].UsageCount, want)
+		}
+	}
+
+	// Further accesses must not exceed the cap.
 	cs.Access(0, descs)
 	if descs[0].UsageCount != maxUsageCount {
-		t.Errorf("UsageCount after Access: got %d want %d", descs[0].UsageCount, maxUsageCount)
+		t.Errorf("UsageCount exceeded cap: got %d want %d",
+			descs[0].UsageCount, maxUsageCount)
 	}
 }
 

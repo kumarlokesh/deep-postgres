@@ -3,14 +3,14 @@ package storage
 // EvictionPolicy is the pluggable interface for buffer replacement strategies.
 //
 // PostgreSQL uses clock-sweep (StrategyGetBuffer in freelist.c).  This
-// interface allows alternative policies — LRU, ARC, etc. — to be swapped in
+// interface allows alternative policies - LRU, ARC, etc. - to be swapped in
 // for experimentation without changing the rest of the buffer pool.
 //
 // Implementations must handle the case where Victim is called on a pool in
-// which every buffer is pinned.  In that case the implementation should
+// which every buffer is pinned. In that case the implementation should
 // return InvalidBufferId to signal exhaustion.
 //
-// Concurrency: single-threaded by design — no locking required.
+// Concurrency: single-threaded by design - no locking required.
 
 // EvictionPolicy selects a victim buffer for replacement.
 type EvictionPolicy interface {
@@ -19,7 +19,7 @@ type EvictionPolicy interface {
 	Init(numBuffers int)
 
 	// Access is called every time a buffer is pinned (cache hit or new
-	// allocation).  The policy uses this to maintain its internal state (e.g.
+	// allocation). The policy uses this to maintain its internal state (e.g.
 	// incrementing usage count for clock-sweep, updating the LRU position).
 	Access(id BufferId, descriptors []BufferDesc)
 
@@ -40,8 +40,11 @@ type EvictionPolicy interface {
 //   - If UsageCount > 0: decrement and skip.
 //   - If UsageCount == 0: this is the victim.
 //
-// Access sets UsageCount = maxUsageCount so recently-used buffers survive
-// maxUsageCount full sweeps before becoming candidates.
+// Access increments UsageCount by 1 up to maxUsageCount (matches PostgreSQL's
+// StrategyGetBuffer in freelist.c: "if (buf->usage_count < BM_MAX_USAGE_COUNT)
+// buf->usage_count++"). A page touched once survives 1 sweep; a page touched
+// five times survives 5 sweeps - not more. Setting to max on every access
+// would make a single touch indistinguishable from 100 touches.
 type ClockSweepPolicy struct {
 	clockHand  int
 	numBuffers int
@@ -53,7 +56,9 @@ func (cs *ClockSweepPolicy) Init(numBuffers int) {
 }
 
 func (cs *ClockSweepPolicy) Access(id BufferId, descriptors []BufferDesc) {
-	descriptors[id].UsageCount = maxUsageCount
+	if descriptors[id].UsageCount < maxUsageCount {
+		descriptors[id].UsageCount++
+	}
 }
 
 func (cs *ClockSweepPolicy) Victim(descriptors []BufferDesc) (BufferId, bool) {
@@ -87,11 +92,11 @@ func (cs *ClockSweepPolicy) Victim(descriptors []BufferDesc) (BufferId, bool) {
 
 // ── LRU ───────────────────────────────────────────────────────────────────────
 
-// LRUPolicy evicts the Least Recently Used buffer — the one that was accessed
+// LRUPolicy evicts the Least Recently Used buffer - the one that was accessed
 // longest ago.
 //
 // The policy maintains a doubly-linked list of buffer IDs ordered from most
-// recently used (head) to least recently used (tail).  Access moves a buffer
+// recently used (head) to least recently used (tail). Access moves a buffer
 // to the head; Victim returns the tail.
 type LRUPolicy struct {
 	order []BufferId // order[i] = buffer ID at position i (0 = MRU, n-1 = LRU)
