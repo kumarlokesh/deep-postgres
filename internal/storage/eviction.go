@@ -34,17 +34,14 @@ type EvictionPolicy interface {
 
 // ClockSweepPolicy implements the clock-sweep algorithm used by PostgreSQL.
 //
-// Each buffer has a UsageCount (0–maxUsageCount) stored in its BufferDesc.
-// The clock hand sweeps through the ring:
+// usage_count (0–maxUsageCount) is packed into bits 18-22 of each BufferDesc's
+// atomic state word.  The clock hand sweeps through the ring:
 //   - If the buffer is pinned: skip.
-//   - If UsageCount > 0: decrement and skip.
-//   - If UsageCount == 0: this is the victim.
+//   - If usage_count > 0: decrement and skip.
+//   - If usage_count == 0 and unpinned: victim.
 //
-// Access increments UsageCount by 1 up to maxUsageCount (matches PostgreSQL's
-// StrategyGetBuffer in freelist.c: "if (buf->usage_count < BM_MAX_USAGE_COUNT)
-// buf->usage_count++"). A page touched once survives 1 sweep; a page touched
-// five times survives 5 sweeps - not more. Setting to max on every access
-// would make a single touch indistinguishable from 100 touches.
+// Access calls bumpUsageCount which increments by 1 up to maxUsageCount.
+// A page touched once survives 1 sweep; a page touched 5+ times survives 5.
 type ClockSweepPolicy struct {
 	clockHand  int
 	numBuffers int
@@ -56,9 +53,7 @@ func (cs *ClockSweepPolicy) Init(numBuffers int) {
 }
 
 func (cs *ClockSweepPolicy) Access(id BufferId, descriptors []BufferDesc) {
-	if descriptors[id].UsageCount < maxUsageCount {
-		descriptors[id].UsageCount++
-	}
+	descriptors[id].bumpUsageCount()
 }
 
 func (cs *ClockSweepPolicy) Victim(descriptors []BufferDesc) (BufferId, bool) {
@@ -82,8 +77,8 @@ func (cs *ClockSweepPolicy) Victim(descriptors []BufferDesc) (BufferId, bool) {
 		if desc.IsPinned() {
 			continue
 		}
-		if desc.UsageCount > 0 {
-			desc.UsageCount--
+		if desc.UsageCount() > 0 {
+			desc.decUsageCount()
 			continue
 		}
 		return BufferId(id), true

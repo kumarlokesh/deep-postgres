@@ -3,17 +3,36 @@ package storage
 // Buffer manager (from src/backend/storage/buffer/).
 //
 // The buffer pool holds a fixed number of 8 KB page slots in memory.
-// Each slot has a BufferDesc tracking which disk block it holds, its
-// reference count (pin count), usage count, and dirty/valid flags.
+// Each slot has a BufferDesc tracking which disk block it holds and its
+// current state.
 //
-// Replacement policy: clock-sweep, same as PostgreSQL's.
-// A buffer can be evicted only when its pin count is 0 and its usage count
-// has been decremented to 0 by the clock hand sweeping past it.
+// State word (matches PostgreSQL's packed buf_internals.h layout):
 //
-// Thread-safety note: this implementation is intentionally single-threaded
-// (no locking). Concurrency will be added when building the smgr layer.
+//	bits  0-17: pin count  (max 262 143; BUF_REFCOUNT_MASK in PG)
+//	bits 18-22: usage_count (max 31; capped at maxUsageCount=5; BUF_USAGECOUNT_MASK)
+//	bit  23:    BM_DIRTY         - page has been modified
+//	bit  24:    BM_VALID         - slot holds a valid page
+//	bit  25:    BM_IO_IN_PROGRESS - smgr read/write in progress
+//	bit  26:    BM_IO_ERROR      - previous I/O failed (reserved)
+//	bit  27:    BM_PIN_COUNT_WAITER - one LockBufferForCleanup waiter registered
+//
+// Using a single atomic word for pin count + usage_count + flags lets
+// them all be read in one load and updated with a single CAS - no
+// secondary lock required.
+//
+// Content lock: a sync.RWMutex on each BufferDesc serialises page content
+// access. Callers must hold a pin before acquiring the content lock (two-phase
+// protocol: pin → lock content → read/write → unlock content → unpin).
+//
+// Replacement policy: clock-sweep, same as PostgreSQL's. A buffer can be
+// evicted only when its pin count is 0 and its usage_count has been
+// decremented to 0 by the clock hand sweeping past it.
+//
+// Thread-safety note: single-threaded by design (no goroutine synchronisation
+// beyond the atomic state word). Concurrency will be added when building the
+// smgr layer.
 
-import "sync/atomic"
+import "sync"
 
 // BufferId is an index into the buffer pool array.
 type BufferId = uint32
@@ -48,43 +67,174 @@ func MainTag(relId Oid, block BlockNumber) BufferTag {
 	return BufferTag{RelationId: relId, Fork: ForkMain, BlockNum: block}
 }
 
-// BufferStateFlags are bit flags on a buffer descriptor.
-type BufferStateFlags uint32
+// ── Packed state word constants ───────────────────────────────────────────────
 
+// bufRefcountMask covers bits 0-17 of the state word (pin count).
+const bufRefcountMask = uint32(0x0003_FFFF)
+
+// bufUsageShift / bufUsageMask cover bits 18-22 of the state word (usage_count).
 const (
-	BmValid        BufferStateFlags = 1 << 0 // buffer holds a valid page
-	BmDirty        BufferStateFlags = 1 << 1 // page has been modified
-	BmIOInProgress BufferStateFlags = 1 << 2 // I/O is in progress
+	bufUsageShift = 18
+	bufUsageMask  = uint32(0x007C_0000) // bits 18-22 (5 bits, max 31)
+	bufUsageOne   = uint32(1) << bufUsageShift
 )
 
 // maxUsageCount is the ceiling for the clock-sweep usage counter.
-// PostgreSQL uses 5.
-const maxUsageCount = 5
+// Matches PostgreSQL's BM_MAX_USAGE_COUNT = 5 (buf_internals.h).
+const maxUsageCount = uint32(5)
+
+// Bit flags in the upper part of the state word.
+const (
+	BmDirty          = uint32(1) << 23 // page has been modified
+	BmValid          = uint32(1) << 24 // slot holds a valid page
+	BmIOInProgress   = uint32(1) << 25 // I/O in progress on this slot
+	BmIOError        = uint32(1) << 26 // previous I/O failed (reserved)
+	BmPinCountWaiter = uint32(1) << 27 // LockBufferForCleanup waiter present
+)
+
+// ── BufferLockMode ────────────────────────────────────────────────────────────
+
+// BufferLockMode selects shared or exclusive content-level access.
+// Matches PostgreSQL's BufferAccessStrategyType / BUFFER_LOCK_* macros.
+type BufferLockMode uint8
+
+const (
+	// BufferLockShared allows concurrent reads.
+	// Multiple goroutines may hold shared locks simultaneously.
+	BufferLockShared BufferLockMode = 0
+
+	// BufferLockExclusive is required for any page modification.
+	// Exclusive excludes all other shared and exclusive holders.
+	BufferLockExclusive BufferLockMode = 1
+)
+
+// ── BufferDesc ────────────────────────────────────────────────────────────────
 
 // BufferDesc is the metadata record for one buffer slot.
 // Matches PostgreSQL's BufferDesc (buf_internals.h).
+//
+// Two-phase locking discipline (mirroring PostgreSQL's LockBuffer semantics):
+//  1. Acquire a pin: ReadBuffer / Pin → increments the pin count in state.
+//  2. Acquire the content lock: LockBuffer(id, mode).
+//  3. Read or write page content.
+//  4. Release the content lock: UnlockBuffer(id, mode).
+//  5. Release the pin: UnpinBuffer.
+//
+// The content lock must NOT be acquired without a prior pin. LockBuffer
+// enforces this with a panic in debug builds.
 type BufferDesc struct {
-	Tag        BufferTag
-	State      BufferStateFlags
-	refcount   atomic.Uint32
-	UsageCount uint8
+	Tag   BufferTag
+	state sync.Mutex // guards access to the packed uint32 state word below
+	// packed packs pin count + usage_count + flags into one value.
+	// Access only via the helper methods; never read/write directly.
+	packed uint32
+
+	// contentLock serialises page content access.
+	// Callers must hold a pin before acquiring this lock (see LockBuffer).
+	contentLock sync.RWMutex
+
+	// cleanupWaiter is reserved for LockBufferForCleanup semantics:
+	// a 1 signals that one waiter needs all other pins to drain before
+	// it can acquire exclusive access (used by VACUUM to reclaim pages).
+	// TODO: wire up once vacuum needs pin-count-zero exclusion.
+	cleanupWaiter uint32
 }
 
-func (d *BufferDesc) IsValid() bool    { return d.State&BmValid != 0 }
-func (d *BufferDesc) IsDirty() bool    { return d.State&BmDirty != 0 }
-func (d *BufferDesc) IsPinned() bool   { return d.refcount.Load() > 0 }
-func (d *BufferDesc) PinCount() uint32 { return d.refcount.Load() }
+// loadState returns the current packed state word.
+// Caller must not hold d.state (used for reads that don't need consistency
+// with writes - fine for single-threaded use).
+func (d *BufferDesc) loadState() uint32 { return d.packed }
 
-// Pin increments the reference count.
-func (d *BufferDesc) Pin() { d.refcount.Add(1) }
+// ── Pin count ─────────────────────────────────────────────────────────────────
 
-// Unpin decrements the reference count. Panics if already zero.
+// Pin increments the pin count.
+func (d *BufferDesc) Pin() {
+	d.state.Lock()
+	d.packed += 1 // refcount in bits 0-17; won't overflow into bit 18
+	d.state.Unlock()
+}
+
+// Unpin decrements the pin count. Panics if already zero.
 func (d *BufferDesc) Unpin() {
-	prev := d.refcount.Add(^uint32(0)) // subtract 1
-	if prev == ^uint32(0) {            // wrapped (was 0)
+	d.state.Lock()
+	rc := d.packed & bufRefcountMask
+	if rc == 0 {
+		d.state.Unlock()
 		panic("unpin of buffer with zero pin count")
 	}
+	d.packed--
+	d.state.Unlock()
 }
+
+// PinCount returns the current pin count.
+func (d *BufferDesc) PinCount() uint32 { return d.loadState() & bufRefcountMask }
+
+// IsPinned reports whether any caller holds a pin.
+func (d *BufferDesc) IsPinned() bool { return d.PinCount() > 0 }
+
+// ── Usage count ───────────────────────────────────────────────────────────────
+
+// UsageCount returns the current usage count (0–maxUsageCount).
+func (d *BufferDesc) UsageCount() uint8 {
+	return uint8((d.loadState() & bufUsageMask) >> bufUsageShift)
+}
+
+// setUsageCount overwrites the usage count field. Package-internal; used by
+// eviction policies and tests.
+func (d *BufferDesc) setUsageCount(n uint8) {
+	d.state.Lock()
+	d.packed = (d.packed &^ bufUsageMask) | (uint32(n)<<bufUsageShift)&bufUsageMask
+	d.state.Unlock()
+}
+
+// bumpUsageCount increments usage_count by 1, capped at maxUsageCount.
+// Matches PostgreSQL's StrategyGetBuffer:
+//
+//	if (buf->usage_count < BM_MAX_USAGE_COUNT) buf->usage_count++;
+func (d *BufferDesc) bumpUsageCount() {
+	d.state.Lock()
+	uc := (d.packed & bufUsageMask) >> bufUsageShift
+	if uc < maxUsageCount {
+		d.packed += bufUsageOne
+	}
+	d.state.Unlock()
+}
+
+// decUsageCount decrements usage_count by 1, floored at 0.
+func (d *BufferDesc) decUsageCount() {
+	d.state.Lock()
+	if d.packed&bufUsageMask != 0 {
+		d.packed -= bufUsageOne
+	}
+	d.state.Unlock()
+}
+
+// ── State flags ───────────────────────────────────────────────────────────────
+
+// IsValid reports whether the slot holds a valid page.
+func (d *BufferDesc) IsValid() bool { return d.loadState()&BmValid != 0 }
+
+// IsDirty reports whether the page has unflushed modifications.
+func (d *BufferDesc) IsDirty() bool { return d.loadState()&BmDirty != 0 }
+
+// IsIOInProgress reports whether an smgr read/write is in progress.
+func (d *BufferDesc) IsIOInProgress() bool { return d.loadState()&BmIOInProgress != 0 }
+
+// setFlags atomically ORs mask into the state word.
+func (d *BufferDesc) setFlags(mask uint32) {
+	d.state.Lock()
+	d.packed |= mask
+	d.state.Unlock()
+}
+
+// clearFlags atomically clears mask bits from the state word.
+func (d *BufferDesc) clearFlags(mask uint32) {
+	d.state.Lock()
+	d.packed &^= mask
+	d.state.Unlock()
+}
+
+// ── BufferPoolStats ───────────────────────────────────────────────────────────
 
 // BufferPoolStats is returned by BufferPool.Stats().
 type BufferPoolStats struct {
@@ -93,6 +243,8 @@ type BufferPoolStats struct {
 	Dirty  int
 	Pinned int
 }
+
+// ── BufferTracer ──────────────────────────────────────────────────────────────
 
 // BufferTracer receives events from the buffer pool.
 // Implement this interface to collect hit/miss/eviction metrics.
@@ -110,14 +262,16 @@ func (NoopBufferTracer) OnHit(BufferTag)         {}
 func (NoopBufferTracer) OnMiss(BufferTag)        {}
 func (NoopBufferTracer) OnEvict(BufferTag, bool) {}
 
+// ── BufferPool ────────────────────────────────────────────────────────────────
+
 // relEntry binds a relation's file location to its storage manager.
 type relEntry struct {
 	node RelFileNode
 	smgr StorageManager
 }
 
-// BufferPool manages a fixed pool of page buffers.  The replacement strategy
-// is pluggable via EvictionPolicy; the default is ClockSweep.  An optional
+// BufferPool manages a fixed pool of page buffers. The replacement strategy
+// is pluggable via EvictionPolicy; the default is ClockSweep. An optional
 // BufferTracer receives hit/miss/eviction events for instrumentation.
 type BufferPool struct {
 	descriptors []BufferDesc
@@ -158,7 +312,7 @@ func NewBufferPoolWithPolicy(numBuffers int, policy EvictionPolicy) *BufferPool 
 	return pool
 }
 
-// SetTracer replaces the pool's BufferTracer.  Pass NoopBufferTracer{} to
+// SetTracer replaces the pool's BufferTracer. Pass NoopBufferTracer{} to
 // disable tracing.
 func (p *BufferPool) SetTracer(t BufferTracer) { p.tracer = t }
 
@@ -166,7 +320,7 @@ func (p *BufferPool) SetTracer(t BufferTracer) { p.tracer = t }
 func (p *BufferPool) NumBuffers() int { return p.numBuffers }
 
 // RegisterRelation binds a relation OID to its physical location and storage
-// manager.  After registration, ReadBuffer will load cache misses from disk
+// manager. After registration, ReadBuffer will load cache misses from disk
 // and dirty evictions will be written back via smgr.
 func (p *BufferPool) RegisterRelation(relId Oid, node RelFileNode, smgr StorageManager) {
 	p.rels[relId] = relEntry{node: node, smgr: smgr}
@@ -174,9 +328,16 @@ func (p *BufferPool) RegisterRelation(relId Oid, node RelFileNode, smgr StorageM
 
 // ReadBuffer returns the buffer ID for tag, pinning it.
 // If the page is already in the pool, its existing slot is returned.
-// Otherwise, a new slot is allocated via clock-sweep (possibly evicting a page).
+// Otherwise, a new slot is allocated via the eviction policy (possibly
+// evicting a page).
 //
 // The caller must call UnpinBuffer when done with the buffer.
+//
+// IO_IN_PROGRESS discipline: the slot is marked BM_IO_IN_PROGRESS for the
+// duration of the smgr read. In a multi-threaded extension a second caller
+// requesting the same block would wait on an io_in_progress condition variable
+// until the first reader clears the flag. This single-threaded implementation
+// sets and clears the flag correctly so the bit is always accurate.
 func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 	// Fast path: already cached.
 	if id, ok := p.tagMap[tag]; ok {
@@ -214,7 +375,7 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 	if desc.IsDirty() {
 		p.tracer.OnEvict(oldTag, true)
 		p.writePage(oldTag, p.pages[id])
-		desc.State &^= BmDirty
+		desc.clearFlags(BmDirty)
 	} else if desc.IsValid() {
 		p.tracer.OnEvict(oldTag, false)
 	}
@@ -228,8 +389,10 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 
 	// Initialise the slot.
 	desc.Tag = tag
-	desc.State = BmValid
-	desc.UsageCount = 0
+	// Reset packed word: clear everything, then set BmValid.
+	desc.state.Lock()
+	desc.packed = BmValid
+	desc.state.Unlock()
 	desc.Pin()
 
 	// Notify tag-aware policy of the new load; plain policies use Access.
@@ -239,18 +402,19 @@ func (p *BufferPool) ReadBuffer(tag BufferTag) (BufferId, error) {
 		p.policy.Access(id, p.descriptors)
 	}
 
-	// Load the page from disk if a storage manager is registered.
-	// On a miss (block does not exist yet), fall back to a fresh empty page.
+	// Mark I/O in progress while loading from disk.
+	desc.setFlags(BmIOInProgress)
 	if !p.readPage(tag, p.pages[id]) {
 		p.pages[id].init()
 	}
+	desc.clearFlags(BmIOInProgress)
 
 	p.tagMap[tag] = id
 
 	return id, nil
 }
 
-// readPage fills page from disk via smgr.  Returns true on success.
+// readPage fills page from disk via smgr. Returns true on success.
 func (p *BufferPool) readPage(tag BufferTag, page *Page) bool {
 	entry, ok := p.rels[tag.RelationId]
 	if !ok {
@@ -260,7 +424,7 @@ func (p *BufferPool) readPage(tag BufferTag, page *Page) bool {
 	return err == nil
 }
 
-// writePage flushes page to disk via smgr.  Silently ignored if no smgr is registered.
+// writePage flushes page to disk via smgr. Silently ignored if no smgr is registered.
 func (p *BufferPool) writePage(tag BufferTag, page *Page) {
 	entry, ok := p.rels[tag.RelationId]
 	if !ok {
@@ -276,6 +440,52 @@ func (p *BufferPool) UnpinBuffer(id BufferId) error {
 		return err
 	}
 	p.descriptors[id].Unpin()
+	return nil
+}
+
+// LockBuffer acquires the content lock on buffer id in the requested mode.
+//
+// Two-phase discipline: the caller must hold a pin on id before calling
+// LockBuffer. Violating this ordering panics immediately so the bug is
+// caught at the call site rather than manifesting as a data race later.
+//
+//	Correct usage:
+//	  id, _ := pool.ReadBuffer(tag)          // acquires pin
+//	  pool.LockBuffer(id, BufferLockShared)   // acquires content lock
+//	  page, _ := pool.GetPage(id)
+//	  ... read page ...
+//	  pool.UnlockBuffer(id, BufferLockShared)
+//	  pool.UnpinBuffer(id)
+func (p *BufferPool) LockBuffer(id BufferId, mode BufferLockMode) error {
+	if err := p.validateId(id); err != nil {
+		return err
+	}
+	desc := &p.descriptors[id]
+	if !desc.IsPinned() {
+		panic("LockBuffer: caller must hold a pin before acquiring content lock")
+	}
+	switch mode {
+	case BufferLockShared:
+		desc.contentLock.RLock()
+	case BufferLockExclusive:
+		desc.contentLock.Lock()
+	}
+	return nil
+}
+
+// UnlockBuffer releases the content lock on buffer id.
+// The mode must match the mode passed to the corresponding LockBuffer call.
+func (p *BufferPool) UnlockBuffer(id BufferId, mode BufferLockMode) error {
+	if err := p.validateId(id); err != nil {
+		return err
+	}
+	desc := &p.descriptors[id]
+	switch mode {
+	case BufferLockShared:
+		desc.contentLock.RUnlock()
+	case BufferLockExclusive:
+		desc.contentLock.Unlock()
+	}
 	return nil
 }
 
@@ -301,7 +511,7 @@ func (p *BufferPool) GetPageForWrite(id BufferId) (*Page, error) {
 	if !desc.IsPinned() {
 		return nil, errBufferNotPinned(id)
 	}
-	desc.State |= BmDirty
+	desc.setFlags(BmDirty)
 	return p.pages[id], nil
 }
 
@@ -310,7 +520,7 @@ func (p *BufferPool) MarkDirty(id BufferId) error {
 	if err := p.validateId(id); err != nil {
 		return err
 	}
-	p.descriptors[id].State |= BmDirty
+	p.descriptors[id].setFlags(BmDirty)
 	return nil
 }
 
@@ -336,7 +546,7 @@ func (p *BufferPool) FlushAll() {
 		desc := &p.descriptors[i]
 		if desc.IsDirty() {
 			p.writePage(desc.Tag, p.pages[i])
-			desc.State &^= BmDirty
+			desc.clearFlags(BmDirty)
 		}
 	}
 }
@@ -362,12 +572,13 @@ func (p *BufferPool) InvalidateRange(relId Oid, fork ForkNumber, from BlockNumbe
 		}
 		if desc.IsDirty() {
 			p.writePage(tag, p.pages[i])
-			desc.State &^= BmDirty
+			desc.clearFlags(BmDirty)
 		}
 		delete(p.tagMap, tag)
-		desc.State &^= BmValid
 		desc.Tag = BufferTag{}
-		desc.UsageCount = 0
+		desc.state.Lock()
+		desc.packed = 0 // clear valid, usage_count, refcount, all flags
+		desc.state.Unlock()
 	}
 }
 

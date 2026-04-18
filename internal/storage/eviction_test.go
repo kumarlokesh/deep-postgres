@@ -58,12 +58,11 @@ func TestClockSweepDrainsUsageCount(t *testing.T) {
 	cs.Init(2)
 	descs := makeDescs(2)
 
-	// Set UsageCount on both to 1.  First Victim call should drain them;
-	// second call should return 0.
-	descs[0].UsageCount = 1
-	descs[1].UsageCount = 1
+	// Set usage_count on both to 1 via the package-internal setter.
+	descs[0].setUsageCount(1)
+	descs[1].setUsageCount(1)
 
-	// Multiple calls drain usage counts; eventually returns a victim.
+	// Multiple Victim calls drain usage counts; eventually returns a victim.
 	var found bool
 	for range 10 {
 		if _, ok := cs.Victim(descs); ok {
@@ -96,19 +95,19 @@ func TestClockSweepAccessIncrementsUsageCount(t *testing.T) {
 	descs := makeDescs(2)
 
 	// Each access increments by 1.
-	for want := uint8(1); want <= maxUsageCount; want++ {
+	for want := uint8(1); want <= uint8(maxUsageCount); want++ {
 		cs.Access(0, descs)
-		if descs[0].UsageCount != want {
+		if descs[0].UsageCount() != want {
 			t.Errorf("after %d Access calls: UsageCount=%d want %d",
-				want, descs[0].UsageCount, want)
+				want, descs[0].UsageCount(), want)
 		}
 	}
 
 	// Further accesses must not exceed the cap.
 	cs.Access(0, descs)
-	if descs[0].UsageCount != maxUsageCount {
+	if descs[0].UsageCount() != uint8(maxUsageCount) {
 		t.Errorf("UsageCount exceeded cap: got %d want %d",
-			descs[0].UsageCount, maxUsageCount)
+			descs[0].UsageCount(), maxUsageCount)
 	}
 }
 
