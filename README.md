@@ -1,7 +1,5 @@
 # deep-postgres
 
-PostgreSQL internals, engineered end-to-end.
-
 deep-postgres reconstructs core PostgreSQL engine subsystems in Go for learning,
 correctness-first implementation, and experimentation:
 
@@ -18,15 +16,6 @@ This is a research/education codebase. It is **not** a production database.
 - **WAL**: in progress
 - **MVCC**: in progress
 - **Executor**: pending
-
-## Repository layout
-
-- **`cmd/deep-postgres/`**: main entrypoint
-- **`internal/storage/`**: page/tuple layout, buffer pool, smgr, B-tree index
-- **`internal/wal/`**: WAL record/page parsing, resource managers, redo engine
-- **`internal/mvcc/`**: CLOG, transaction manager, snapshot/visibility logic
-- **`internal/executor/`**: execution operators (SeqScan/IndexScan planned)
-- **`internal/instrumentation/`**: tracing/logging hooks
 
 ## Build and test
 

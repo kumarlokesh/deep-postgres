@@ -2,7 +2,7 @@ package storage
 
 // EvictionPolicy is the pluggable interface for buffer replacement strategies.
 //
-// PostgreSQL uses clock-sweep (StrategyGetBuffer in freelist.c).  This
+// PostgreSQL uses clock-sweep (StrategyGetBuffer in freelist.c). This
 // interface allows alternative policies - LRU, ARC, etc. - to be swapped in
 // for experimentation without changing the rest of the buffer pool.
 //
