@@ -6,3 +6,5 @@ coverage.html
 
 # Go build/module caches
 vendor/
+
+walreplay
