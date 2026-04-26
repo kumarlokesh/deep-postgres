@@ -271,7 +271,7 @@ func (p *Page) init() {
 }
 
 // Bytes returns a slice of the raw page bytes backed by the page's internal
-// buffer.  Callers that need an independent snapshot should copy the result.
+// buffer. Callers that need an independent snapshot should copy the result.
 func (p *Page) Bytes() []byte {
 	return p.data[:]
 }
@@ -412,11 +412,11 @@ func (p *Page) InsertTuple(tupleData []byte) (int, error) {
 
 // InsertTupleAt inserts tupleData and places the new line pointer at position
 // pos in the ItemId array, shifting existing line pointers [pos, n) one slot
-// to the right.  This keeps the ItemId array in sorted key order for B-tree
+// to the right. This keeps the ItemId array in sorted key order for B-tree
 // pages, which require entries in their logical key sequence.
 //
 // Tuple data is always written downward (same as InsertTuple); only the
-// line pointer array is rearranged.  Requires len(tupleData)+ItemIdSize <= FreeSpace()
+// line pointer array is rearranged. Requires len(tupleData)+ItemIdSize <= FreeSpace()
 // and 0 <= pos <= ItemCount().
 func (p *Page) InsertTupleAt(pos int, tupleData []byte) error {
 	tupleLen := len(tupleData)
@@ -475,7 +475,7 @@ func (p *Page) GetTuple(i int) ([]byte, error) {
 }
 
 // SetItemIdUnused reclaims the line pointer at 0-based index i by zeroing it
-// (ItemIdData = 0 has LpUnused flags).  Used by VACUUM after confirming that
+// (ItemIdData = 0 has LpUnused flags). Used by VACUUM after confirming that
 // no index entry points to this slot.
 func (p *Page) SetItemIdUnused(i int) error {
 	if i < 0 || i >= p.ItemCount() {
@@ -519,7 +519,7 @@ func (p *Page) UpdateTupleHeader(i int, hdr *HeapTupleHeader) error {
 
 // SetItemIdRedirect rewrites the line pointer at 0-based index i as an
 // LP_REDIRECT pointing at targetOffset (1-based OffsetNumber of the chain
-// head on the same page).  Used to simulate HOT chain pruning in tests.
+// head on the same page). Used to simulate HOT chain pruning in tests.
 func (p *Page) SetItemIdRedirect(i int, targetOffset uint16) error {
 	if i < 0 || i >= p.ItemCount() {
 		return errInvalidItemIndex(i)
@@ -527,6 +527,27 @@ func (p *Page) SetItemIdRedirect(i int, targetOffset uint16) error {
 	off := itemIdOffset(i)
 	encodeItemId(p.data[off:off+ItemIdSize], NewItemIdRedirect(targetOffset))
 	return nil
+}
+
+// FollowRedirect resolves one LP_REDIRECT hop from offset (1-based).
+//
+// If the line pointer at offset is LP_REDIRECT, it returns the redirect target
+// (also 1-based) and true. For LP_NORMAL or any other state it returns the
+// original offset and false. An out-of-range offset returns (offset, false).
+//
+// For LP_REDIRECT, lp.Off() stores the 1-based OffsetNumber of the chain head
+// on the same page. This is what NewItemIdRedirect encodes, so a single call
+// to FollowRedirect is sufficient to reach an LP_NORMAL slot.
+func (p *Page) FollowRedirect(offset OffsetNumber) (OffsetNumber, bool) {
+	idx := int(offset) - 1
+	if idx < 0 || idx >= p.ItemCount() {
+		return offset, false
+	}
+	lp, err := p.GetItemId(idx)
+	if err != nil || !lp.IsRedirect() {
+		return offset, false
+	}
+	return OffsetNumber(lp.Off()), true
 }
 
 // Validate checks page header consistency.

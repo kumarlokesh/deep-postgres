@@ -405,3 +405,52 @@ func TestPageFromBytes(t *testing.T) {
 		t.Errorf("round-trip tuple mismatch: %v %q", err, got)
 	}
 }
+
+// ── FollowRedirect ────────────────────────────────────────────────────────────
+
+func TestFollowRedirectNormal(t *testing.T) {
+	p := NewPage()
+	// Insert a tuple at slot 0 (LP_NORMAL).
+	p.InsertTuple([]byte("normal"))
+
+	// A normal LP should not be followed.
+	target, followed := p.FollowRedirect(1)
+	if followed {
+		t.Errorf("FollowRedirect on LP_NORMAL returned followed=true")
+	}
+	if target != 1 {
+		t.Errorf("FollowRedirect on LP_NORMAL: got offset %d, want 1", target)
+	}
+}
+
+func TestFollowRedirectHop(t *testing.T) {
+	p := NewPage()
+	// Insert two tuples: slot 0 is the redirect source, slot 1 is the chain head.
+	p.InsertTuple([]byte("chain-head")) // slot 0 (1-based: offset 1)
+	p.InsertTuple([]byte("other"))      // slot 1 (1-based: offset 2)
+
+	// Overwrite slot 0 as LP_REDIRECT → offset 2.
+	if err := p.SetItemIdRedirect(0, 2); err != nil {
+		t.Fatalf("SetItemIdRedirect: %v", err)
+	}
+
+	target, followed := p.FollowRedirect(1)
+	if !followed {
+		t.Errorf("FollowRedirect on LP_REDIRECT returned followed=false")
+	}
+	if target != 2 {
+		t.Errorf("FollowRedirect: got target %d, want 2", target)
+	}
+}
+
+func TestFollowRedirectOutOfRange(t *testing.T) {
+	p := NewPage()
+	// Empty page: no line pointers.
+	target, followed := p.FollowRedirect(5)
+	if followed {
+		t.Errorf("FollowRedirect out-of-range returned followed=true")
+	}
+	if target != 5 {
+		t.Errorf("FollowRedirect out-of-range: got %d, want 5 (unchanged)", target)
+	}
+}
