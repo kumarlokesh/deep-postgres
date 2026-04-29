@@ -417,6 +417,111 @@ func (s *WalPageStore) ApplyBtreeSplit(
 	return nil
 }
 
+// ── HEAP2 operations ──────────────────────────────────────────────────────────
+
+// ApplyMultiInsert inserts multiple tuples (raw HeapTuple bytes, in slot order)
+// on the given block. If initPage is true the page is initialised first.
+func (s *WalPageStore) ApplyMultiInsert(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, tuples [][]byte, initPage bool, recLSN wal.LSN) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyMultiInsert ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	if initPage {
+		pg.init()
+	}
+	for i, tup := range tuples {
+		if _, err := pg.InsertTuple(tup); err != nil {
+			return fmt.Errorf("wal_apply: ApplyMultiInsert tuple %d: %w", i, err)
+		}
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// ApplyPrune applies HOT chain pruning results on the given block:
+//   - For each {fromOffset, toOffset} in redirects (1-based), set LP_REDIRECT.
+//   - For each offset in dead (1-based), mark LP_DEAD.
+func (s *WalPageStore) ApplyPrune(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, redirects [][2]uint16, dead []uint16, recLSN wal.LSN) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyPrune ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	for _, r := range redirects {
+		if err := pg.SetItemIdRedirect(int(r[0])-1, r[1]); err != nil {
+			return fmt.Errorf("wal_apply: ApplyPrune redirect %d→%d: %w", r[0], r[1], err)
+		}
+	}
+	for _, off := range dead {
+		if err := pg.MarkDead(int(off) - 1); err != nil {
+			return fmt.Errorf("wal_apply: ApplyPrune dead offset %d: %w", off, err)
+		}
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// ApplyVacuumDeadItems marks the given 1-based offsets as LP_DEAD on the block.
+func (s *WalPageStore) ApplyVacuumDeadItems(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, offsets []uint16, recLSN wal.LSN) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplyVacuumDeadItems ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	for _, off := range offsets {
+		if err := pg.MarkDead(int(off) - 1); err != nil {
+			return fmt.Errorf("wal_apply: ApplyVacuumDeadItems offset %d: %w", off, err)
+		}
+	}
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
+// ApplySetVisible marks the block all-visible by setting PD_ALL_VISIBLE.
+func (s *WalPageStore) ApplySetVisible(loc wal.RelFileLocator, fork wal.ForkNum, block uint32, recLSN wal.LSN) error {
+	id, err := s.getBuffer(loc, fork, block)
+	if err != nil {
+		return fmt.Errorf("wal_apply: ApplySetVisible ReadBuffer: %w", err)
+	}
+	defer s.pool.UnpinBuffer(id) //nolint:errcheck
+
+	pg, err := s.pool.GetPageForWrite(id)
+	if err != nil {
+		return err
+	}
+	if pg.LSN() >= uint64(recLSN) {
+		return nil
+	}
+	pg.SetFlag(PDAllVisible)
+	pg.SetLSN(uint64(recLSN))
+	return nil
+}
+
 // ── FPW restoration helper ────────────────────────────────────────────────────
 
 // restoreFPWBytes writes a BlockImage back into the raw 8 KB page slice.

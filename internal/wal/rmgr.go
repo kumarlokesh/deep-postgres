@@ -57,6 +57,22 @@ type PageWriter interface {
 	// isHot — true when old and new tuples are on the same page.
 	// initNewPage — true when the new block must be initialised before insert.
 	ApplyUpdate(loc RelFileLocator, fork ForkNum, xid uint32, oldBlock, newBlock uint32, oldOffnum, newOffnum uint16, newTupleData []byte, isHot, initNewPage bool, recLSN LSN) error
+
+	// ApplyMultiInsert inserts multiple tuples on a block in slot order.
+	// tuples contains the full raw HeapTuple bytes for each tuple.
+	// If initPage is true the page is initialised before the first insert.
+	ApplyMultiInsert(loc RelFileLocator, fork ForkNum, block uint32, tuples [][]byte, initPage bool, recLSN LSN) error
+
+	// ApplyPrune applies HOT chain pruning results on the given block:
+	//   redirects — [][2]uint16 pairs {fromOffset, toOffset} (1-based) set LP_REDIRECT
+	//   dead      — 1-based offsets to mark LP_DEAD
+	ApplyPrune(loc RelFileLocator, fork ForkNum, block uint32, redirects [][2]uint16, dead []uint16, recLSN LSN) error
+
+	// ApplyVacuumDeadItems marks the given 1-based offsets as LP_DEAD on the block.
+	ApplyVacuumDeadItems(loc RelFileLocator, fork ForkNum, block uint32, offsets []uint16, recLSN LSN) error
+
+	// ApplySetVisible marks the block all-visible (sets PD_ALL_VISIBLE).
+	ApplySetVisible(loc RelFileLocator, fork ForkNum, block uint32, recLSN LSN) error
 }
 
 // RedoContext carries the per-record context passed to RmgrOps.Redo.

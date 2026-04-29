@@ -43,12 +43,14 @@ PostgreSQL's `XLogRecord` wire format and crash recovery pipeline.
 - **Redo engine**: `RedoEngine` (start/end LSN, `SegmentProvider`, progress callback,
   `SetStore`, `SetLogical`, `SetTracer`); `InMemoryProvider`; `SegmentBuilder`
 - **Resource managers**: `RmgrHeap` (INSERT, DELETE, UPDATE + HOT, FPW),
+  `RmgrHeap2` (MULTI_INSERT, PRUNE, VACUUM, VISIBLE; FREEZE_PAGE/LOCK_UPDATED/NEW_CID/REWRITE acknowledged),
   `RmgrBtree` (leaf/upper/meta insert, split), `RmgrXact` (commit/abort),
   `RmgrXlog` (checkpoint, WAL-switch)
 - **Logical decoding**: `ReorderBuffer` buffers per-XID changes and emits on commit;
   `ChangeHandler` interface; `LogicalDecoder` wired into `RedoEngine`
 - **WAL–storage bridge**: `WalPageStore` implements `wal.PageWriter`, applying FPW,
-  heap insert/delete/update, and B-tree insert/split to the buffer pool
+  heap insert/delete/update, multi-insert, prune, vacuum dead-item removal,
+  all-visible marking, and B-tree insert/split to the buffer pool
 - **File-backed replay**: `FileSegmentProvider` reads real `pg_wal` directories;
   `ParseLSN`, `ListSegments`, `DetectSegmentSize`
 - **CLI tool** (`cmd/walreplay`): `--wal-dir / --timeline / --start-lsn / --end-lsn`,
