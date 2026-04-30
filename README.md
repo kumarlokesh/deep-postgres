@@ -97,6 +97,7 @@ Isolated benchmarks and correctness proofs.
 | `pin-contention/` | Atomic CAS vs mutex for pin/unpin under 1000-goroutine contention; CAS is 4.3× faster at 4 cores |
 | `mvcc-isolation/` | Eight MVCC snapshot isolation scenarios: dirty-read prevention, snapshot consistency, HOT chain visibility, command-counter fence |
 | `buffer-eviction/` | ClockSweep vs LRU vs ARC under sequential, random, and hot-set workloads; ARC gains +7.6 pp on skewed workloads at a 13–38 % CPU cost |
+| `crash-recovery/` | End-to-end crash recovery: WAL replay into a fresh pool, commit tracking via logical decoder, MVCC scan - uncommitted tx invisible, committed visible |
 
 ## Build and test
 

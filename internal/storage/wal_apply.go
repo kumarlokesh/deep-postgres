@@ -38,6 +38,12 @@ func NewWalPageStore(pool *BufferPool, smgr StorageManager) *WalPageStore {
 	}
 }
 
+// RelOidFor returns (or assigns) the internal Oid for a RelFileLocator.
+// Exported so experiment packages can construct BufferTags after WAL replay.
+func (s *WalPageStore) RelOidFor(loc wal.RelFileLocator) Oid {
+	return s.relOid(loc)
+}
+
 // relOid returns (or assigns) the internal Oid for a RelFileLocator.
 func (s *WalPageStore) relOid(loc wal.RelFileLocator) Oid {
 	k := walRelKey{loc.SpcOid, loc.DbOid, loc.RelOid}
