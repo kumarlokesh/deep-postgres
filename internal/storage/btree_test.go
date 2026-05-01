@@ -235,3 +235,168 @@ func TestBTreeFreeSpace(t *testing.T) {
 		t.Errorf("free space %d too low", free)
 	}
 }
+
+// TestBTreeIsRightmost verifies that IsRightmost reflects BtpoNext state.
+func TestBTreeIsRightmost(t *testing.T) {
+	bp := NewBTreePage(BTreeLeaf)
+	if !bp.IsRightmost() {
+		t.Error("fresh page should be rightmost (BtpoNext = Invalid)")
+	}
+	bp.SetSiblings(InvalidBlockNumber, 5)
+	if bp.IsRightmost() {
+		t.Error("page with BtpoNext=5 should not be rightmost")
+	}
+	bp.SetSiblings(InvalidBlockNumber, InvalidBlockNumber)
+	if !bp.IsRightmost() {
+		t.Error("page with BtpoNext=Invalid should be rightmost again")
+	}
+}
+
+// TestBTreeHighKey verifies SetHighKey / HighKey round-trip.
+func TestBTreeHighKey(t *testing.T) {
+	bp := NewBTreePage(BTreeLeaf)
+
+	if _, ok := bp.HighKey(); ok {
+		t.Error("rightmost page should have no high key")
+	}
+
+	// Make the page non-rightmost, then set a high key.
+	bp.SetSiblings(InvalidBlockNumber, 7)
+	if bp.IsRightmost() {
+		t.Fatal("expected non-rightmost after SetSiblings with right=7")
+	}
+
+	hk := make([]byte, 4)
+	binary.BigEndian.PutUint32(hk, 42)
+	if err := bp.SetHighKey(hk); err != nil {
+		t.Fatalf("SetHighKey: %v", err)
+	}
+
+	got, ok := bp.HighKey()
+	if !ok {
+		t.Fatal("HighKey returned false after SetHighKey")
+	}
+	if !bytes.Equal(got, hk) {
+		t.Errorf("HighKey = %v, want %v", got, hk)
+	}
+
+	// Data entries added after SetHighKey should not be confused with high key.
+	key := make([]byte, 4)
+	binary.BigEndian.PutUint32(key, 10)
+	if _, err := bp.InsertEntry(key, 1, 1); err != nil {
+		t.Fatalf("InsertEntry: %v", err)
+	}
+	// NumEntries must be 1 (data) despite 2 physical slots.
+	if n := bp.NumEntries(); n != 1 {
+		t.Errorf("NumEntries = %d, want 1", n)
+	}
+	gotKey, blk, off, err := bp.GetEntry(0)
+	if err != nil {
+		t.Fatalf("GetEntry(0): %v", err)
+	}
+	if !bytes.Equal(gotKey, key) {
+		t.Errorf("GetEntry key = %v, want %v", gotKey, key)
+	}
+	if blk != 1 || off != 1 {
+		t.Errorf("GetEntry TID = (%d, %d), want (1, 1)", blk, off)
+	}
+}
+
+// TestBTreeHighKeyOnSplit verifies that after a leaf split:
+//   - the left page carries a high key equal to the first key of the right page
+//   - the right page (rightmost) has no high key
+func TestBTreeHighKeyOnSplit(t *testing.T) {
+	idx, rel, cleanup := newTestBTreeIndex(t)
+	defer cleanup()
+
+	// Insert enough keys to force exactly one leaf split.
+	const n = 600
+	insertRange(t, idx, 0, n)
+
+	// Walk the leaf level and collect high keys.
+	meta, _ := idx.readMeta()
+	_, firstLeafBlk, err := idx.findLeaf(meta.Root, meta.Level, encKey(0))
+	if err != nil {
+		t.Fatalf("findLeaf: %v", err)
+	}
+
+	var leafBlocks []BlockNumber
+	for blk := firstLeafBlk; blk != InvalidBlockNumber; {
+		id, err := rel.ReadBlock(ForkMain, blk)
+		if err != nil {
+			t.Fatalf("ReadBlock: %v", err)
+		}
+		page, _ := rel.Pool.GetPage(id)
+		bp, _ := BTreePageFromPage(page)
+		opaque := bp.Opaque()
+		leafBlocks = append(leafBlocks, blk)
+
+		// Every non-rightmost leaf must have a high key.
+		if !bp.IsRightmost() {
+			hk, ok := bp.HighKey()
+			if !ok {
+				t.Errorf("leaf block %d is non-rightmost but has no high key", blk)
+			} else {
+				// High key must equal the first data entry of the right sibling.
+				nextId, nerr := rel.ReadBlock(ForkMain, opaque.BtpoNext)
+				if nerr == nil {
+					nextPage, _ := rel.Pool.GetPage(nextId)
+					nextBP, _ := BTreePageFromPage(nextPage)
+					if nextBP.NumEntries() > 0 {
+						firstRight, _, _, _ := nextBP.GetEntry(0)
+						if !bytes.Equal(hk, firstRight) {
+							t.Errorf("block %d high key %v != right sibling first key %v",
+								blk, hk, firstRight)
+						}
+					}
+					rel.Pool.UnpinBuffer(nextId)
+				}
+			}
+		} else {
+			if _, ok := bp.HighKey(); ok {
+				t.Errorf("rightmost leaf block %d should not have a high key", blk)
+			}
+		}
+
+		next := opaque.BtpoNext
+		rel.Pool.UnpinBuffer(id)
+		blk = next
+	}
+
+	if len(leafBlocks) < 2 {
+		t.Errorf("expected multiple leaf pages, got %d", len(leafBlocks))
+	}
+}
+
+// TestBTreeIncompleteSplitCleared verifies that no leaf page retains
+// BTPIncomplete after a successful multi-split insert sequence.
+func TestBTreeIncompleteSplitCleared(t *testing.T) {
+	idx, rel, cleanup := newTestBTreeIndex(t)
+	defer cleanup()
+
+	const n = 1200 // two-level tree with multiple internal splits
+	insertRange(t, idx, 0, n)
+
+	meta, _ := idx.readMeta()
+	_, firstLeafBlk, err := idx.findLeaf(meta.Root, meta.Level, encKey(0))
+	if err != nil {
+		t.Fatalf("findLeaf: %v", err)
+	}
+
+	for blk := firstLeafBlk; blk != InvalidBlockNumber; {
+		id, err := rel.ReadBlock(ForkMain, blk)
+		if err != nil {
+			t.Fatalf("ReadBlock: %v", err)
+		}
+		page, _ := rel.Pool.GetPage(id)
+		bp, _ := BTreePageFromPage(page)
+		opaque := bp.Opaque()
+
+		if BTreePageFlags(opaque.BtpoFlags)&BTPIncomplete != 0 {
+			t.Errorf("leaf block %d still has BTPIncomplete set", blk)
+		}
+		next := opaque.BtpoNext
+		rel.Pool.UnpinBuffer(id)
+		blk = next
+	}
+}

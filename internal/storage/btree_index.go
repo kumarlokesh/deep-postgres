@@ -193,6 +193,26 @@ func (idx *BTreeIndex) findLeaf(rootBlk BlockNumber, _ uint32, key []byte) ([]bt
 			return nil, InvalidBlockNumber, err
 		}
 
+		// BTPIncomplete means this page was split but the parent downlink was
+		// not yet inserted.  The key may already live on the right sibling.
+		if BTreePageFlags(bp.Opaque().BtpoFlags)&BTPIncomplete != 0 {
+			next := bp.Opaque().BtpoNext
+			idx.rel.Pool.UnpinBuffer(id)
+			blk = next
+			continue
+		}
+
+		// Right-link traversal: if the search key exceeds this page's high key
+		// the page was split since we latched it and the key is now on the right.
+		if hk, ok := bp.HighKey(); ok {
+			if idx.cmp(key, hk) > 0 {
+				next := bp.Opaque().BtpoNext
+				idx.rel.Pool.UnpinBuffer(id)
+				blk = next
+				continue
+			}
+		}
+
 		if bp.IsLeaf() {
 			idx.rel.Pool.UnpinBuffer(id)
 			return path, blk, nil
@@ -276,9 +296,12 @@ func (idx *BTreeIndex) insertAtLeaf(path []btreePath, leafBlk BlockNumber, key [
 // parent (or creates a new root).
 func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *BTreePage, insertPos int, key []byte, heapBlock BlockNumber, heapOffset OffsetNumber) error {
 	n := leftBP.NumEntries()
-	var splitPos int // entries [0, splitPos) stay; [splitPos, n) move right
 
-	// Collect all entries that will remain on the left page, plus the new one.
+	// Save the old high key before rebuilding — the right page inherits it when
+	// the original left was itself non-rightmost.
+	oldHighKey, hasOldHighKey := leftBP.HighKey()
+
+	// Collect all data entries plus the new one.
 	type entry struct {
 		key   []byte
 		block BlockNumber
@@ -292,14 +315,17 @@ func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *
 		}
 		all = append(all, entry{k, b, o})
 	}
-	// Insert new entry at insertPos.
 	newE := entry{key, heapBlock, heapOffset}
-	all = append(all, entry{}) // grow
+	all = append(all, entry{})
 	copy(all[insertPos+1:], all[insertPos:])
 	all[insertPos] = newE
 
 	total := len(all)
-	splitPos = total / 2
+	splitPos := total / 2
+
+	// The promoted separator key is the first key of the right page.
+	promotedKey := make([]byte, len(all[splitPos].key))
+	copy(promotedKey, all[splitPos].key)
 
 	// Allocate the right page.
 	rightBlk, rightId, err := idx.rel.Extend(ForkMain)
@@ -317,20 +343,20 @@ func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *
 	leftIsRoot := leftBP.IsRoot()
 	var leftType, rightType BTreePageType
 	if leftIsRoot {
-		leftType = BTreeRootLeaf // will be demoted below after new root created
+		leftType = BTreeRootLeaf
 	} else {
 		leftType = BTreeLeaf
 	}
 	rightType = BTreeLeaf
 
-	// Rebuild left page with entries [0, splitPos).
+	// Rebuild left page with data entries [0, splitPos) while still rightmost.
 	newLeft := NewBTreePage(leftType)
 	for i := 0; i < splitPos; i++ {
 		if err := newLeft.InsertEntrySortedAt(i, all[i].key, all[i].block, all[i].off); err != nil {
 			return err
 		}
 	}
-	// Rebuild right page with entries [splitPos, total).
+	// Rebuild right page with data entries [splitPos, total) while still rightmost.
 	newRight := NewBTreePage(rightType)
 	for i := splitPos; i < total; i++ {
 		if err := newRight.InsertEntrySortedAt(i-splitPos, all[i].key, all[i].block, all[i].off); err != nil {
@@ -339,10 +365,9 @@ func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *
 	}
 
 	// Update sibling chains.
-	// Use Opaque() directly to get the raw block numbers (including
-	// InvalidBlockNumber) rather than the bool-returning helpers, which
-	// return 0 on "no sibling" — a value that would incorrectly match
-	// the meta-page block number.
+	// Use Opaque() directly for raw block numbers (InvalidBlockNumber must be
+	// preserved; the bool-returning helpers return 0 on "no sibling", which
+	// would collide with the meta-page block number).
 	leftOldOpaque := leftBP.Opaque()
 	newRight.SetSiblings(leftBlk, leftOldOpaque.BtpoNext)
 	newLeft.SetSiblings(leftOldOpaque.BtpoPrev, rightBlk)
@@ -352,7 +377,19 @@ func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *
 		}
 	}
 
-	// Copy rebuilt pages back.
+	// Set high keys now that sibling pointers are wired (IsRightmost() is accurate).
+	// Left page is non-rightmost after SetSiblings → high key = first key of right page.
+	if err := newLeft.SetHighKey(promotedKey); err != nil {
+		return err
+	}
+	// Right page inherits the original left page's high key when left was non-rightmost.
+	if hasOldHighKey && !newRight.IsRightmost() {
+		if err := newRight.SetHighKey(oldHighKey); err != nil {
+			return err
+		}
+	}
+
+	// Copy rebuilt pages back to the buffer pool.
 	leftId, err := idx.rel.ReadBlock(ForkMain, leftBlk)
 	if err != nil {
 		return err
@@ -365,17 +402,33 @@ func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *
 	copy(leftPage.data[:], newLeft.page.data[:])
 	copy(rightPage.data[:], newRight.page.data[:])
 
-	// The promoted key into the parent is the first key of the right page.
-	promotedKey, _, _, err := newRight.GetEntry(0)
-	if err != nil {
-		return err
+	// Mark left page incomplete until the parent downlink is inserted.
+	// This lets findLeaf detect a crash-interrupted split and follow the right-link.
+	{
+		bp, _ := BTreePageFromPage(leftPage)
+		o := bp.Opaque()
+		o.BtpoFlags |= uint16(BTPIncomplete)
+		bp.setOpaque(o)
 	}
 
-	// Propagate upward.
+	var parentErr error
 	if leftIsRoot {
-		return idx.createNewRoot(leftBlk, rightBlk, promotedKey, newLeft.Level()+1)
+		parentErr = idx.createNewRoot(leftBlk, rightBlk, promotedKey, newLeft.Level()+1)
+	} else {
+		parentErr = idx.insertInParent(path, leftBlk, rightBlk, promotedKey)
 	}
-	return idx.insertInParent(path, leftBlk, rightBlk, promotedKey)
+	if parentErr != nil {
+		return parentErr
+	}
+
+	// Clear BTPIncomplete now that the parent downlink is in place.
+	{
+		bp, _ := BTreePageFromPage(leftPage)
+		o := bp.Opaque()
+		o.BtpoFlags &^= uint16(BTPIncomplete)
+		bp.setOpaque(o)
+	}
+	return nil
 }
 
 // createNewRoot allocates a new internal root page with two downlinks.
@@ -469,6 +522,9 @@ func (idx *BTreeIndex) insertInParent(path []btreePath, leftBlk, rightBlk BlockN
 func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, leftBP *BTreePage, insertPos int, key []byte, childBlk BlockNumber) error {
 	n := leftBP.NumEntries()
 
+	// Save old high key before rebuilding.
+	oldHighKey, hasOldHighKey := leftBP.HighKey()
+
 	type entry struct {
 		key   []byte
 		block BlockNumber
@@ -489,7 +545,11 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 
 	total := len(all)
 	splitPos := total / 2
-	promotedKey := all[splitPos].key
+
+	// Middle entry is promoted to the parent; left keeps [0,splitPos),
+	// right gets [splitPos+1, total).
+	promotedKey := make([]byte, len(all[splitPos].key))
+	copy(promotedKey, all[splitPos].key)
 
 	rightBlk, rightId, err := idx.rel.Extend(ForkMain)
 	if err != nil {
@@ -504,6 +564,7 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 	leftIsRoot := leftBP.IsRoot()
 	leftLevel := leftBP.Level()
 
+	// Rebuild both halves while rightmost (no high key yet).
 	newLeft := NewBTreePage(BTreeInternal)
 	newRight := NewBTreePage(BTreeInternal)
 	if leftIsRoot {
@@ -522,7 +583,7 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 			return err
 		}
 	}
-	// Skip splitPos (it moves up as the separator).
+	// Skip splitPos — it moves up as the separator.
 	for i := splitPos + 1; i < total; i++ {
 		if err := newRight.InsertEntrySortedAt(i-splitPos-1, all[i].key, all[i].block, all[i].off); err != nil {
 			return err
@@ -534,6 +595,17 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 	newLeft.SetSiblings(leftOldOpaque.BtpoPrev, rightBlk)
 	if leftOldOpaque.BtpoNext != InvalidBlockNumber {
 		if err := idx.updateLeftSibling(leftOldOpaque.BtpoNext, rightBlk); err != nil {
+			return err
+		}
+	}
+
+	// Set high keys now that sibling pointers are correct.
+	// Left page high key = the promoted separator (upper bound of the left half).
+	if err := newLeft.SetHighKey(promotedKey); err != nil {
+		return err
+	}
+	if hasOldHighKey && !newRight.IsRightmost() {
+		if err := newRight.SetHighKey(oldHighKey); err != nil {
 			return err
 		}
 	}
@@ -550,10 +622,31 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 	copy(leftPage.data[:], newLeft.page.data[:])
 	copy(rightPage.data[:], newRight.page.data[:])
 
-	if leftIsRoot {
-		return idx.createNewRoot(leftBlk, rightBlk, promotedKey, leftLevel+1)
+	// BTPIncomplete signals an in-progress split until the parent downlink lands.
+	{
+		bp, _ := BTreePageFromPage(leftPage)
+		o := bp.Opaque()
+		o.BtpoFlags |= uint16(BTPIncomplete)
+		bp.setOpaque(o)
 	}
-	return idx.insertInParent(path, leftBlk, rightBlk, promotedKey)
+
+	var parentErr error
+	if leftIsRoot {
+		parentErr = idx.createNewRoot(leftBlk, rightBlk, promotedKey, leftLevel+1)
+	} else {
+		parentErr = idx.insertInParent(path, leftBlk, rightBlk, promotedKey)
+	}
+	if parentErr != nil {
+		return parentErr
+	}
+
+	{
+		bp, _ := BTreePageFromPage(leftPage)
+		o := bp.Opaque()
+		o.BtpoFlags &^= uint16(BTPIncomplete)
+		bp.setOpaque(o)
+	}
+	return nil
 }
 
 // updateLeftSibling sets the btpo_prev of the page at blk to newPrev.
@@ -696,8 +789,9 @@ func (idx *BTreeIndex) SearchAll(key []byte) ([]HeapTID, error) {
 
 // ── BTreePage sorted-insert helper ──────────────────────────────────────────
 
-// InsertEntrySortedAt inserts an index entry at the given position, shifting
-// existing entries right.  Used by BTreeIndex to maintain sorted order.
+// InsertEntrySortedAt inserts an index entry at the given data-entry position
+// (0-based among data entries), shifting existing entries right.
+// The physical slot is pos + dataOffset() to skip the high key on non-rightmost pages.
 func (b *BTreePage) InsertEntrySortedAt(pos int, key []byte, heapBlock BlockNumber, heapOffset OffsetNumber) error {
 	tupleSize := IndexTupleHeaderSize + len(key)
 	header := NewIndexTuple(heapBlock, heapOffset, uint16(tupleSize))
@@ -706,7 +800,7 @@ func (b *BTreePage) InsertEntrySortedAt(pos int, key []byte, heapBlock BlockNumb
 	encodeIndexTuple(buf[:IndexTupleHeaderSize], &header)
 	copy(buf[IndexTupleHeaderSize:], key)
 
-	return b.page.InsertTupleAt(pos, buf)
+	return b.page.InsertTupleAt(pos+b.dataOffset(), buf)
 }
 
 // ── Byte helpers ─────────────────────────────────────────────────────────────

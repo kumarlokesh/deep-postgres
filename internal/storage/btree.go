@@ -248,6 +248,22 @@ func (b *BTreePage) IsMeta() bool {
 	return BTreePageFlags(b.Opaque().BtpoFlags)&BTPMeta != 0
 }
 
+// IsRightmost reports whether this page has no right sibling (P_RIGHTMOST).
+// Rightmost pages do not carry a high key.
+func (b *BTreePage) IsRightmost() bool {
+	return b.Opaque().BtpoNext == InvalidBlockNumber
+}
+
+// dataOffset returns the physical slot offset for the first data entry.
+// Non-rightmost pages reserve slot 0 (P_HIKEY) for the high key, so data
+// entries begin at slot 1. Rightmost pages have no high key; data starts at 0.
+func (b *BTreePage) dataOffset() int {
+	if b.IsRightmost() {
+		return 0
+	}
+	return 1
+}
+
 // Level returns the tree level (0 = leaf).
 func (b *BTreePage) Level() uint32 { return b.Opaque().BtpoLevel }
 
@@ -278,8 +294,9 @@ func (b *BTreePage) SetSiblings(left, right BlockNumber) {
 	b.setOpaque(o)
 }
 
-// NumEntries returns the number of index entries on this page.
-func (b *BTreePage) NumEntries() int { return b.page.ItemCount() }
+// NumEntries returns the number of data index entries on this page.
+// The high key slot (slot 0 on non-rightmost pages) is excluded.
+func (b *BTreePage) NumEntries() int { return b.page.ItemCount() - b.dataOffset() }
 
 // FreeSpace returns available bytes for new entries.
 func (b *BTreePage) FreeSpace() int { return b.page.FreeSpace() }
@@ -303,9 +320,10 @@ func (b *BTreePage) InsertDownlink(key []byte, childBlock BlockNumber) (int, err
 	return b.InsertEntry(key, childBlock, 0)
 }
 
-// GetEntry returns the key bytes and heap TID for the 0-based slot index.
+// GetEntry returns the key bytes and heap TID for the i-th data entry (0-based).
+// The high key slot on non-rightmost pages is transparent to callers.
 func (b *BTreePage) GetEntry(i int) (key []byte, block BlockNumber, offset OffsetNumber, err error) {
-	raw, err := b.page.GetTuple(i)
+	raw, err := b.page.GetTuple(i + b.dataOffset())
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -320,6 +338,33 @@ func (b *BTreePage) GetEntry(i int) (key []byte, block BlockNumber, offset Offse
 	k := make([]byte, len(raw)-IndexTupleHeaderSize)
 	copy(k, raw[IndexTupleHeaderSize:])
 	return k, blk, off, nil
+}
+
+// HighKey returns the high key stored at slot 0 on non-rightmost pages.
+// Returns (nil, false) for rightmost pages, which carry no high key.
+func (b *BTreePage) HighKey() ([]byte, bool) {
+	if b.IsRightmost() {
+		return nil, false
+	}
+	raw, err := b.page.GetTuple(0)
+	if err != nil || raw == nil || len(raw) < IndexTupleHeaderSize {
+		return nil, false
+	}
+	k := make([]byte, len(raw)-IndexTupleHeaderSize)
+	copy(k, raw[IndexTupleHeaderSize:])
+	return k, true
+}
+
+// SetHighKey writes the high-key tuple at physical slot 0.
+// Must be called after SetSiblings has made the page non-rightmost (BtpoNext set).
+// The high key uses a zero TID since it is not a pointer to any heap tuple.
+func (b *BTreePage) SetHighKey(key []byte) error {
+	tupleSize := IndexTupleHeaderSize + len(key)
+	header := NewIndexTuple(0, 0, uint16(tupleSize))
+	buf := make([]byte, tupleSize)
+	encodeIndexTuple(buf[:IndexTupleHeaderSize], &header)
+	copy(buf[IndexTupleHeaderSize:], key)
+	return b.page.InsertTupleAt(0, buf)
 }
 
 // SearchLeaf returns the 0-based position of the first entry where
