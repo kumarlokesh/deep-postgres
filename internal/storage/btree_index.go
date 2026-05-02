@@ -3,7 +3,7 @@ package storage
 import "encoding/binary"
 
 // BTreeIndex implements a persistent, multi-page B-tree index backed by a
-// Relation.  The design maps closely to PostgreSQL's nbtree AM:
+// Relation. The design maps closely to PostgreSQL's nbtree AM:
 //
 //   - Block 0: meta page (BTMetaPageData embedded in the special space).
 //   - Block 1: initial root/leaf page (a combined BTP_ROOT | BTP_LEAF page).
@@ -194,7 +194,7 @@ func (idx *BTreeIndex) findLeaf(rootBlk BlockNumber, _ uint32, key []byte) ([]bt
 		}
 
 		// BTPIncomplete means this page was split but the parent downlink was
-		// not yet inserted.  The key may already live on the right sibling.
+		// not yet inserted. The key may already live on the right sibling.
 		if BTreePageFlags(bp.Opaque().BtpoFlags)&BTPIncomplete != 0 {
 			next := bp.Opaque().BtpoNext
 			idx.rel.Pool.UnpinBuffer(id)
@@ -226,7 +226,7 @@ func (idx *BTreeIndex) findLeaf(rootBlk BlockNumber, _ uint32, key []byte) ([]bt
 		//
 		// Because the zero-key placeholder at pos 0 is lexicographically
 		// less than any real key, SearchLeaf always returns pos >= 1 for
-		// non-zero keys.  We need to check: if the found entry's key is
+		// non-zero keys. We need to check: if the found entry's key is
 		// strictly greater than searchKey, the correct child is pos-1.
 		// Otherwise (key == entryKey[pos] or pos == 0) follow pos.
 		pos := bp.SearchLeaf(func(entryKey []byte) int { return idx.cmp(entryKey, key) })
@@ -260,7 +260,7 @@ type btreePath struct {
 	pos      int
 }
 
-// insertAtLeaf inserts the entry into the leaf page.  If the page is full it
+// insertAtLeaf inserts the entry into the leaf page. If the page is full it
 // splits the page and propagates the split upward.
 func (idx *BTreeIndex) insertAtLeaf(path []btreePath, leafBlk BlockNumber, key []byte, heapBlock BlockNumber, heapOffset OffsetNumber) error {
 	id, err := idx.rel.ReadBlock(ForkMain, leafBlk)
@@ -297,7 +297,7 @@ func (idx *BTreeIndex) insertAtLeaf(path []btreePath, leafBlk BlockNumber, key [
 func (idx *BTreeIndex) splitLeaf(path []btreePath, leftBlk BlockNumber, leftBP *BTreePage, insertPos int, key []byte, heapBlock BlockNumber, heapOffset OffsetNumber) error {
 	n := leftBP.NumEntries()
 
-	// Save the old high key before rebuilding — the right page inherits it when
+	// Save the old high key before rebuilding - the right page inherits it when
 	// the original left was itself non-rightmost.
 	oldHighKey, hasOldHighKey := leftBP.HighKey()
 
@@ -449,7 +449,7 @@ func (idx *BTreeIndex) createNewRoot(leftBlk, rightBlk BlockNumber, separatorKey
 	o := bp.Opaque()
 	o.BtpoLevel = level
 	bp.setOpaque(o)
-	// Insert left downlink (no key — leftmost child uses empty/smallest key).
+	// Insert left downlink (no key - leftmost child uses empty/smallest key).
 	leftKey := make([]byte, len(separatorKey)) // placeholder: same width, zero-filled
 	if err := bp.InsertEntrySortedAt(0, leftKey, leftBlk, 0); err != nil {
 		return err
@@ -483,7 +483,7 @@ func (idx *BTreeIndex) createNewRoot(leftBlk, rightBlk BlockNumber, separatorKey
 // If the parent is full, it splits recursively.
 func (idx *BTreeIndex) insertInParent(path []btreePath, leftBlk, rightBlk BlockNumber, separatorKey []byte) error {
 	if len(path) == 0 {
-		// No parent in path — the left page was the root.
+		// No parent in path - the left page was the root.
 		return idx.createNewRoot(leftBlk, rightBlk, separatorKey, 1)
 	}
 
@@ -514,7 +514,7 @@ func (idx *BTreeIndex) insertInParent(path []btreePath, leftBlk, rightBlk BlockN
 		return parentBP.InsertEntrySortedAt(pos, separatorKey, rightBlk, 0)
 	}
 
-	// Parent is also full — split it.
+	// Parent is also full - split it.
 	return idx.splitInternal(path, parent.blockNum, parentBP, pos, separatorKey, rightBlk)
 }
 
@@ -583,7 +583,7 @@ func (idx *BTreeIndex) splitInternal(path []btreePath, leftBlk BlockNumber, left
 			return err
 		}
 	}
-	// Skip splitPos — it moves up as the separator.
+	// Skip splitPos - it moves up as the separator.
 	for i := splitPos + 1; i < total; i++ {
 		if err := newRight.InsertEntrySortedAt(i-splitPos-1, all[i].key, all[i].block, all[i].off); err != nil {
 			return err
@@ -785,6 +785,58 @@ func (idx *BTreeIndex) SearchAll(key []byte) ([]HeapTID, error) {
 	}
 
 	return results, nil
+}
+
+// ── Right-link traversal helpers ────────────────────────────────────────────
+
+// FindLeaf returns the leaf block that would contain key, descending from the
+// current root. Useful for recording a leaf block before inducing a split.
+func (idx *BTreeIndex) FindLeaf(key []byte) (BlockNumber, error) {
+	meta, err := idx.readMeta()
+	if err != nil {
+		return InvalidBlockNumber, err
+	}
+	_, leafBlk, err := idx.findLeaf(meta.Root, meta.Level, key)
+	return leafBlk, err
+}
+
+// SearchFromBlock starts a key search at blk instead of the tree root.
+// If the page was split since blk was recorded and the key now lives on a
+// right sibling, right-link traversal (key > high key → follow BtpoNext)
+// finds the correct page. This simulates a goroutine that cached a leaf-page
+// reference across a concurrent split.
+func (idx *BTreeIndex) SearchFromBlock(blk BlockNumber, key []byte) (BlockNumber, OffsetNumber, bool, error) {
+	_, leafBlk, err := idx.findLeaf(blk, 0, key)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	id, err := idx.rel.ReadBlock(ForkMain, leafBlk)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer idx.rel.Pool.UnpinBuffer(id)
+	page, err := idx.rel.Pool.GetPage(id)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	bp, err := BTreePageFromPage(page)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	pos := bp.SearchLeaf(func(ek []byte) int { return idx.cmp(ek, key) })
+	if pos >= bp.NumEntries() {
+		return 0, 0, false, nil
+	}
+	gotKey, heapBlk, off, err := bp.GetEntry(pos)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if idx.cmp(gotKey, key) != 0 {
+		return 0, 0, false, nil
+	}
+	return heapBlk, off, true, nil
 }
 
 // ── BTreePage sorted-insert helper ──────────────────────────────────────────

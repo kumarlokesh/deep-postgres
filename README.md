@@ -23,7 +23,12 @@ B-tree index pages, buffer manager, and access methods.
   count, 18-22 usage count, 23-27 flags), content `RWMutex`, `BM_IO_IN_PROGRESS`
   coordination, WAL write-back hook
 - **B-tree**: leaf/internal page ops, binary search, multi-level inserts with page
-  splits, persistent `BTreeIndex` backed by `smgr`
+  splits, persistent `BTreeIndex` backed by `smgr`; high key at slot 0 on
+  non-rightmost pages (`P_HIKEY` / `P_FIRSTDATAKEY`), right-link traversal
+  (`key > highKey → follow BtpoNext`), `BTP_INCOMPLETE_SPLIT` lifecycle (set
+  before parent downlink insertion, cleared on success), `BTP_HALF_DEAD` /
+  `BTP_DELETED` flags defined; `FindLeaf` / `SearchFromBlock` for stale-pointer
+  recovery
 - **TOAST**: out-of-line tuple storage - `Toastify` / `Detoast`, chunked storage
   relation, inline/external threshold
 - **Vacuum**: `VacuumPage` (dead tuple pruning, HOT chain compaction, freezing),
@@ -98,6 +103,7 @@ Isolated benchmarks and correctness proofs.
 | `mvcc-isolation/` | Eight MVCC snapshot isolation scenarios: dirty-read prevention, snapshot consistency, HOT chain visibility, command-counter fence |
 | `buffer-eviction/` | ClockSweep vs LRU vs ARC under sequential, random, and hot-set workloads; ARC gains +7.6 pp on skewed workloads at a 13–38 % CPU cost |
 | `crash-recovery/` | End-to-end crash recovery: WAL replay into a fresh pool, commit tracking via logical decoder, MVCC scan - uncommitted tx invisible, committed visible |
+| `concurrent-split/` | Concurrent B-tree correctness: 4 goroutines × 250 keys with no losses; right-link traversal from a stale leaf reference (pre-split block) finds a key that migrated to the right sibling |
 
 ## Build and test
 
