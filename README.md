@@ -104,6 +104,7 @@ Isolated benchmarks and correctness proofs.
 | `buffer-eviction/` | ClockSweep vs LRU vs ARC under sequential, random, and hot-set workloads; ARC gains +7.6 pp on skewed workloads at a 13–38 % CPU cost |
 | `crash-recovery/` | End-to-end crash recovery: WAL replay into a fresh pool, commit tracking via logical decoder, MVCC scan - uncommitted tx invisible, committed visible |
 | `concurrent-split/` | Concurrent B-tree correctness: 4 goroutines × 250 keys with no losses; right-link traversal from a stale leaf reference (pre-split block) finds a key that migrated to the right sibling |
+| `tree-viz/` | B-tree structural visualizer: renders root / internal / leaf pages, sibling links, and high keys; verifies 5 invariants (sorted-order, high-key-bound, sibling-links, high-key-match, no-incomplete-split) across 5 insert scenarios |
 
 ## Build and test
 
