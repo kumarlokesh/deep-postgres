@@ -1,9 +1,10 @@
 // Package executor implements PostgreSQL query execution internals.
 //
-// Planned subsystems:
+// Subsystems:
 //   - Executor node model (Plan → Tuple stream)
 //   - SeqScan operator
 //   - IndexScan operator (B-tree)
-//   - Tuple routing and projection
-//   - Execution tracing hooks
+//   - Filter / Limit pipeline nodes
+//   - Execution tracing hooks (TracedNode)
+//   - Tuple routing and projection (pending)
 package executor

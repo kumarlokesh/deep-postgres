@@ -75,6 +75,15 @@ Snapshot manager and transaction lifecycle.
 
 Query execution operators wired to the buffer pool and MVCC layer.
 
+- **Node model**: `Node` interface (`Next() (*ScanTuple, error)` + `Close()`);
+  Volcano iterator protocol; `Collect` drains any node to a slice
+- **Filter**: wraps any `Node` and discards tuples for which a predicate returns
+  false; mirrors PostgreSQL's `ExecQual` qual evaluation
+- **Limit**: stops the tuple stream after at most N tuples; mirrors
+  `nodeLimit.c`
+- **TracedNode**: wraps any `Node` and fires a `Tracer` callback on Open,
+  Tuple, and Close lifecycle events; emits `TraceEvent{NodeName, Phase, Tuple,
+  Seq}`; mirrors PostgreSQL's `InstrStartNode / InstrStopNode`
 - **SeqScan**: forward heap scan with per-tuple `HeapTupleSatisfiesMVCC` filtering;
   VM all-visible fast path; hint-bit writeback
 - **IndexScan**: B-tree equality lookup via `SearchAll`, then `HeapFetch` per TID
