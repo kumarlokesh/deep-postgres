@@ -6,5 +6,5 @@
 //   - IndexScan operator (B-tree)
 //   - Filter / Limit pipeline nodes
 //   - Execution tracing hooks (TracedNode)
-//   - Tuple routing and projection (pending)
+//   - Tuple projection (Project node, Schema, Column)
 package executor

@@ -84,6 +84,10 @@ Query execution operators wired to the buffer pool and MVCC layer.
 - **TracedNode**: wraps any `Node` and fires a `Tracer` callback on Open,
   Tuple, and Close lifecycle events; emits `TraceEvent{NodeName, Phase, Tuple,
   Seq}`; mirrors PostgreSQL's `InstrStartNode / InstrStopNode`
+- **Project**: applies a `ProjectFn` to each tuple; `Schema` (list of named
+  `Column{Offset, Len}`) extracts fixed-width fields from `Data` bytes;
+  `Schema.Get` looks up a column by name in a projected tuple; mirrors
+  PostgreSQL's `ExecProject` / `TupleTableSlot` / `TupleDesc`
 - **SeqScan**: forward heap scan with per-tuple `HeapTupleSatisfiesMVCC` filtering;
   VM all-visible fast path; hint-bit writeback
 - **IndexScan**: B-tree equality lookup via `SearchAll`, then `HeapFetch` per TID
@@ -114,6 +118,7 @@ Isolated benchmarks and correctness proofs.
 | `crash-recovery/` | End-to-end crash recovery: WAL replay into a fresh pool, commit tracking via logical decoder, MVCC scan - uncommitted tx invisible, committed visible |
 | `concurrent-split/` | Concurrent B-tree correctness: 4 goroutines × 250 keys with no losses; right-link traversal from a stale leaf reference (pre-split block) finds a key that migrated to the right sibling |
 | `tree-viz/` | B-tree structural visualizer: renders root / internal / leaf pages, sibling links, and high keys; verifies 5 invariants (sorted-order, high-key-bound, sibling-links, high-key-match, no-incomplete-split) across 5 insert scenarios |
+| `executor-pipeline/` | Integrated sandbox: heap storage + MVCC + `SeqScan → Filter → Project → Limit → TracedNode` wired end-to-end; includes EXPLAIN ANALYZE-style trace output and MVCC snapshot isolation verification |
 
 ## Build and test
 
