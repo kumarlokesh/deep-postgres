@@ -94,6 +94,8 @@ Query execution operators wired to the buffer pool and MVCC layer.
 - **HeapFetch**: `LP_REDIRECT` resolution + `t_ctid` HOT chain walk with MVCC check
 - **HeapInsert**: FSM-guided page selection, relation extension fallback, TOAST
   threshold check, VM / FSM update
+- **HeapDelete**: stamps `xmax` on the target tuple, clears `HEAP_XMAX_INVALID`,
+  clears the page's all-visible VM bit; mirrors `heap_delete()` in `heapam.c`
 - **HeapUpdate**: HOT update (same-page new version) with fallback to cross-page;
   old-tuple xmax / `HEAP_HOT_UPDATED` / `t_ctid` stamping
 - **Vacuum** / **VacuumFull**: dead-tuple reclaim, HOT chain pruning, tuple freezing,
@@ -119,6 +121,7 @@ Isolated benchmarks and correctness proofs.
 | `concurrent-split/` | Concurrent B-tree correctness: 4 goroutines × 250 keys with no losses; right-link traversal from a stale leaf reference (pre-split block) finds a key that migrated to the right sibling |
 | `tree-viz/` | B-tree structural visualizer: renders root / internal / leaf pages, sibling links, and high keys; verifies 5 invariants (sorted-order, high-key-bound, sibling-links, high-key-match, no-incomplete-split) across 5 insert scenarios |
 | `executor-pipeline/` | Integrated sandbox: heap storage + MVCC + `SeqScan → Filter → Project → Limit → TracedNode` wired end-to-end; includes EXPLAIN ANALYZE-style trace output and MVCC snapshot isolation verification |
+| `vacuum-autovacuum/` | Vacuum simulation: heap bloat (LP_NORMAL with committed xmax), regular Vacuum (LP_UNUSED + FSM update), VACUUM FULL (CompactPage), XID freezing, FSM slot reuse, and a threshold-based autovacuum control loop |
 
 ## Build and test
 
