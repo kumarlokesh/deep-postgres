@@ -100,6 +100,14 @@ Query execution operators wired to the buffer pool and MVCC layer.
   old-tuple xmax / `HEAP_HOT_UPDATED` / `t_ctid` stamping
 - **Vacuum** / **VacuumFull**: dead-tuple reclaim, HOT chain pruning, tuple freezing,
   FSM/VM refresh, trailing-page truncation
+- **Sort**: in-memory stable sort of any upstream node; lazy materialization on first
+  `Next` call; mirrors PostgreSQL's `nodeSort.c`
+- **HashAgg**: hash-based `GROUP BY`; each distinct key gets its own `AggFn` set;
+  outputs synthetic tuples with `Data = key || agg₀ || agg₁ …`; mirrors
+  `nodeAgg.c` with `AGG_HASHED` strategy
+- **AggFn interface**: `Update(*ScanTuple)` + `Result() []byte`; built-ins `CountAgg`,
+  `SumAgg`, `MinAgg`, `MaxAgg` (all 8-byte big-endian int64); decode helpers
+  `DecodeCount`, `DecodeSum`, `DecodeMin`, `DecodeMax`
 
 ### Instrumentation (`internal/instrumentation/`)
 
@@ -122,6 +130,7 @@ Isolated benchmarks and correctness proofs.
 | `tree-viz/` | B-tree structural visualizer: renders root / internal / leaf pages, sibling links, and high keys; verifies 5 invariants (sorted-order, high-key-bound, sibling-links, high-key-match, no-incomplete-split) across 5 insert scenarios |
 | `executor-pipeline/` | Integrated sandbox: heap storage + MVCC + `SeqScan → Filter → Project → Limit → TracedNode` wired end-to-end; includes EXPLAIN ANALYZE-style trace output and MVCC snapshot isolation verification |
 | `vacuum-autovacuum/` | Vacuum simulation: heap bloat (LP_NORMAL with committed xmax), regular Vacuum (LP_UNUSED + FSM update), VACUUM FULL (CompactPage), XID freezing, FSM slot reuse, and a threshold-based autovacuum control loop |
+| `group-by/` | Full `GROUP BY` pipeline: `SeqScan → Filter(region=west) → HashAgg(category, COUNT/SUM/MIN/MAX) → Sort(ORDER BY sum DESC)`; mirrors `nodeAgg.c` + `nodeSort.c`; verifies aggregate correctness and sort ordering |
 
 ## Build and test
 

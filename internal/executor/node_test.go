@@ -25,6 +25,8 @@ var _ executor.Node = (*executor.Filter)(nil)
 var _ executor.Node = (*executor.Limit)(nil)
 var _ executor.Node = (*executor.TracedNode)(nil)
 var _ executor.Node = (*executor.Project)(nil)
+var _ executor.Node = (*executor.Sort)(nil)
+var _ executor.Node = (*executor.HashAgg)(nil)
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 
