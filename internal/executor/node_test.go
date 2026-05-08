@@ -27,6 +27,8 @@ var _ executor.Node = (*executor.TracedNode)(nil)
 var _ executor.Node = (*executor.Project)(nil)
 var _ executor.Node = (*executor.Sort)(nil)
 var _ executor.Node = (*executor.HashAgg)(nil)
+var _ executor.Node = (*executor.NestedLoopJoin)(nil)
+var _ executor.Node = (*executor.HashJoin)(nil)
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 

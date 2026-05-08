@@ -108,6 +108,12 @@ Query execution operators wired to the buffer pool and MVCC layer.
 - **AggFn interface**: `Update(*ScanTuple)` + `Result() []byte`; built-ins `CountAgg`,
   `SumAgg`, `MinAgg`, `MaxAgg` (all 8-byte big-endian int64); decode helpers
   `DecodeCount`, `DecodeSum`, `DecodeMin`, `DecodeMax`
+- **NestedLoopJoin**: materializes inner side once; for each outer tuple re-scans
+  the buffer applying a join predicate; user-supplied `combine` assembles output
+  rows; mirrors PostgreSQL's `ExecNestLoop` in `nodeNestloop.c`
+- **HashJoin**: two-phase build/probe - inner side hashed by `buildKeyFn` into an
+  in-memory table; outer side probed via `probeKeyFn`; O(inner) build + O(outer)
+  probe; mirrors `ExecHashJoin` in `nodeHashjoin.c` + `nodeHash.c`
 
 ### Instrumentation (`internal/instrumentation/`)
 
@@ -131,6 +137,7 @@ Isolated benchmarks and correctness proofs.
 | `executor-pipeline/` | Integrated sandbox: heap storage + MVCC + `SeqScan → Filter → Project → Limit → TracedNode` wired end-to-end; includes EXPLAIN ANALYZE-style trace output and MVCC snapshot isolation verification |
 | `vacuum-autovacuum/` | Vacuum simulation: heap bloat (LP_NORMAL with committed xmax), regular Vacuum (LP_UNUSED + FSM update), VACUUM FULL (CompactPage), XID freezing, FSM slot reuse, and a threshold-based autovacuum control loop |
 | `group-by/` | Full `GROUP BY` pipeline: `SeqScan → Filter(region=west) → HashAgg(category, COUNT/SUM/MIN/MAX) → Sort(ORDER BY sum DESC)`; mirrors `nodeAgg.c` + `nodeSort.c`; verifies aggregate correctness and sort ordering |
+| `join/` | `NestedLoopJoin` and `HashJoin` strategies on `orders JOIN customers`; both produce identical results; also shows `JOIN + GROUP BY tier + ORDER BY total_amount DESC`; mirrors `nodeNestloop.c` + `nodeHashjoin.c` |
 
 ## Build and test
 

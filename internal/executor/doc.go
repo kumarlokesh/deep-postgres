@@ -10,4 +10,6 @@
 //   - Sort node (in-memory stable sort; mirrors nodeSort.c)
 //   - HashAgg node (hash-based GROUP BY; mirrors nodeAgg.c AGG_HASHED)
 //   - AggFn interface with COUNT, SUM, MIN, MAX built-ins
+//   - NestedLoopJoin node (inner side materialized; mirrors nodeNestloop.c)
+//   - HashJoin node (build/probe two-phase hash join; mirrors nodeHashjoin.c)
 package executor
