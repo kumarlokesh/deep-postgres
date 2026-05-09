@@ -12,4 +12,5 @@
 //   - AggFn interface with COUNT, SUM, MIN, MAX built-ins
 //   - NestedLoopJoin node (inner side materialized; mirrors nodeNestloop.c)
 //   - HashJoin node (build/probe two-phase hash join; mirrors nodeHashjoin.c)
+//   - MergeJoin node (sort-merge join; pre-sorted inputs; O(N+M); mirrors nodeMergejoin.c)
 package executor

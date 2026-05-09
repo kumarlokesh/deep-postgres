@@ -29,6 +29,7 @@ var _ executor.Node = (*executor.Sort)(nil)
 var _ executor.Node = (*executor.HashAgg)(nil)
 var _ executor.Node = (*executor.NestedLoopJoin)(nil)
 var _ executor.Node = (*executor.HashJoin)(nil)
+var _ executor.Node = (*executor.MergeJoin)(nil)
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 

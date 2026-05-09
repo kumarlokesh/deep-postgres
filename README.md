@@ -114,6 +114,10 @@ Query execution operators wired to the buffer pool and MVCC layer.
 - **HashJoin**: two-phase build/probe - inner side hashed by `buildKeyFn` into an
   in-memory table; outer side probed via `probeKeyFn`; O(inner) build + O(outer)
   probe; mirrors `ExecHashJoin` in `nodeHashjoin.c` + `nodeHash.c`
+- **MergeJoin**: sort-merge join; both inputs must be pre-sorted on the join key;
+  inner group buffered once per key and replayed for each matching outer row;
+  O(N+M) with no hash table; produces sorted output for free; mirrors
+  `ExecMergeJoin` in `nodeMergejoin.c`
 
 ### Instrumentation (`internal/instrumentation/`)
 
@@ -138,6 +142,7 @@ Isolated benchmarks and correctness proofs.
 | `vacuum-autovacuum/` | Vacuum simulation: heap bloat (LP_NORMAL with committed xmax), regular Vacuum (LP_UNUSED + FSM update), VACUUM FULL (CompactPage), XID freezing, FSM slot reuse, and a threshold-based autovacuum control loop |
 | `group-by/` | Full `GROUP BY` pipeline: `SeqScan → Filter(region=west) → HashAgg(category, COUNT/SUM/MIN/MAX) → Sort(ORDER BY sum DESC)`; mirrors `nodeAgg.c` + `nodeSort.c`; verifies aggregate correctness and sort ordering |
 | `join/` | `NestedLoopJoin` and `HashJoin` strategies on `orders JOIN customers`; both produce identical results; also shows `JOIN + GROUP BY tier + ORDER BY total_amount DESC`; mirrors `nodeNestloop.c` + `nodeHashjoin.c` |
+| `merge-join/` | Completes the join trilogy with `MergeJoin` on `employees JOIN departments`; pre-sorted inputs, sorted output for free; `TestAllThreeStrategiesAgree` runs NL, Hash, and Merge on identical data and verifies they match; mirrors `nodeMergejoin.c` |
 
 ## Build and test
 
